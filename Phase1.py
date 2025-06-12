@@ -44,9 +44,9 @@ class FinDataCollector:
                 return {
                     'price': round(current_price, 2),
                     'change': round(change, 2),
-                    'change_percent': f"{change_percent:.2f}%",
+                    'changePercent': f"{change_percent:.2f}%",
                     'volume': int(latest['Volume']) if latest['Volume'] else 0,
-                    'last_updated': str(hist.index[-1].date())
+                    'lastUpdated': str(hist.index[-1].date())
                 }
             else:
                 print(f"  ✗ No stock data for {ticker}")
@@ -55,36 +55,6 @@ class FinDataCollector:
         except Exception as e:
             print(f"  ✗ Yahoo Finance error for {ticker}: {e}")
             return {}
-    """
-    def getCompanyProfile(self, ticker: str) -> Dict:
-        self.rateLimit()
-        url = f"https://financialmodelingprep.com/api/v3/profile/{ticker}"
-        params = {"apikey": self.fmpKey}
-        
-        try:
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
-            
-            if data and isinstance(data, list) and len(data) > 0:
-                company = data[0]
-                return {
-                    'ticker': ticker,
-                    'company_name': company.get('companyName'),
-                    'sector': company.get('sector'),
-                    'industry': company.get('industry'),
-                    'exchange': company.get('exchange'),
-                    'market_cap': company.get('mktCap'),
-                    'description': company.get('description'),
-                    'website': company.get('website'),
-                    'country': company.get('country'),
-                }
-            else:
-                print(f"No FMP data for {ticker}")
-                
-        except Exception as e:
-            print(f"FMP error for {ticker}: {e}")
-    """
     
     def getCompanyProfile(self, ticker: str) -> Dict:
         print(f"  Getting company profile for {ticker}...")
@@ -374,6 +344,19 @@ class FinKG:
                 
                 classifiedAs = Relationship(companyNode, "CLASSIFIED_AS", sectorNode)
                 self.graph.merge(classifiedAs)
+                
+            if 'price' in companyInfo:
+                stockNode = Node("StockPerformance",
+                                    ticker = ticker,
+                                    price = companyInfo.get('price', 0),
+                                    change = companyInfo.get('change', 0),
+                                    changePercent = companyInfo.get('changePercent', '0%'),
+                                    volume = companyInfo.get('volume', 0),
+                                    lastUpdated = companyInfo.get('lastUpdated', ''))
+                self.graph.merge(stockNode, "StockPerfomance", "ticker")
+                hasPerformance = Relationship(companyNode, "HAS_PERFORMANCE", stockNode)
+                self.graph.merge(hasPerformance)
+                
             print(f"Loaded company: {ticker} - {companyInfo.get('companyName', '')}")
     
     def loadArticles(self, newsData: List[Dict]):
@@ -430,21 +413,6 @@ class FinKG:
                     if agencyNode:
                         regulatedBy = Relationship(sectorNode, "REGULATED_BY", agencyNode)
                         self.graph.merge(regulatedBy)
-    
-    def addStockPerformanceData(self, companiesData: Dict):
-        for ticker, companyInfo in companiesData.items():
-            companyNode = self.graph.nodes.match("Company", ticker = ticker).first()
-            if companyNode:
-                stockNode = Node("StockPerformance",
-                                 ticker = ticker,
-                                 price = companyInfo.get('price', 0),
-                                 change = companyInfo.get('change', 0),
-                                 changePercent = companyInfo.get('change_percent', '0%'),
-                                 volume = companyInfo.get('volume', 0),
-                                 lastUpdated = companyInfo.get('lastUpdated', ''))
-                self.graph.merge(stockNode, "StockPerfomance", ticker)
-                hasPerformance = Relationship(companyNode, "HAS_PERFORMANCE", stockNode)
-                self.graph.merge(hasPerformance)
      
 
             
