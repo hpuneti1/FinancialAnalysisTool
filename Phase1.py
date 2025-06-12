@@ -288,7 +288,6 @@ class RAG:
         self.graphBuilder.loadCompanies(self.companiesDB)
         self.graphBuilder.loadArticles(self.newsDB)
         self.graphBuilder.createRegulatoryEntities()
-        self.graphBuilder.addStockPerformanceData(self.companiesDB)
   
   
 class FinKG:
@@ -324,40 +323,64 @@ class FinKG:
         for gicsCode, sectorInfo in gicsSectors.items():
             sectorNode = Node("Sector", gicsCode = gicsCode, name = sectorInfo["name"], level = "sector")
             self.graph.merge(sectorNode, "Sector", "gicsCode")
+    
     def loadCompanies(self, companiesData: Dict):
         for ticker, companyInfo in companiesData.items():
-            companyNode = Node("Company", 
-                               ticker = ticker,
-                               name = companyInfo.get('companyName', ''),
-                               sector = companyInfo.get('sector', ''),
-                               industry = companyInfo.get('industry', ''),
-                               marketCap = companyInfo.get('marketCap', 0), 
-                               exchange = companyInfo.get('exchange', ''),
-                               country = companyInfo.get('country', ''))
-            self.graph.merge(companyNode, "Company", "ticker")
-            sector  = companyInfo.get('sector', '')
-            if sector:
-                sectorNode = self.graph.nodes.match("Sector", name = sector).first()
-                if not sectorNode:
-                    sectorNode = Node("Sector", name = sector, level = "sector")
-                    self.graph.create(sectorNode)
+            try:
+                # Convert numpy types to Python native types
+                def convert_value(value):
+                    if hasattr(value, 'item'):  # numpy scalar
+                        return value.item()
+                    elif isinstance(value, (int, float, str, bool)) or value is None:
+                        return value
+                    else:
+                        return float(value) if str(value).replace('.','').replace('-','').isdigit() else str(value)
                 
-                classifiedAs = Relationship(companyNode, "CLASSIFIED_AS", sectorNode)
-                self.graph.merge(classifiedAs)
+                # Create company node with converted values
+                companyNode = Node("Company", 
+                                ticker=ticker,
+                                name=str(companyInfo.get('companyName', '')),
+                                sector=str(companyInfo.get('sector', '')),
+                                industry=str(companyInfo.get('industry', '')),
+                                marketCap=convert_value(companyInfo.get('marketCap', 0)), 
+                                exchange=str(companyInfo.get('exchange', '')),
+                                country=str(companyInfo.get('country', '')))
                 
-            if 'price' in companyInfo:
-                stockNode = Node("StockPerformance",
-                                    ticker = ticker,
-                                    price = companyInfo.get('price', 0),
-                                    change = companyInfo.get('change', 0),
-                                    changePercent = companyInfo.get('changePercent', '0%'),
-                                    volume = companyInfo.get('volume', 0),
-                                    lastUpdated = companyInfo.get('lastUpdated', ''))
-                self.graph.merge(stockNode, "StockPerfomance", "ticker")
-                hasPerformance = Relationship(companyNode, "HAS_PERFORMANCE", stockNode)
-                self.graph.merge(hasPerformance)
+                self.graph.merge(companyNode, "Company", "ticker")
                 
-            print(f"Loaded company: {ticker} - {companyInfo.get('companyName', '')}")
+                # Handle sector relationship
+                sector = companyInfo.get('sector', '')
+                if sector:
+                    sectorNode = self.graph.nodes.match("Sector", name=sector).first()
+                    if not sectorNode:
+                        sectorNode = Node("Sector", name=str(sector), level="sector")
+                        self.graph.create(sectorNode)
+                    
+                    classifiedAs = Relationship(companyNode, "CLASSIFIED_AS", sectorNode)
+                    self.graph.merge(classifiedAs)
+                
+                # Handle stock performance with data type conversion
+                if 'price' in companyInfo:
+                    stockNode = Node("StockPerformance", 
+                                    ticker=ticker,
+                                    price=convert_value(companyInfo.get('price', 0)),
+                                    change=convert_value(companyInfo.get('change', 0)),
+                                    changePercent=str(companyInfo.get('change_percent', '0%')),  
+                                    volume=convert_value(companyInfo.get('volume', 0)),
+                                    lastUpdated=str(companyInfo.get('last_updated', '')))
+                    
+                    self.graph.merge(stockNode, "StockPerformance", "ticker")  # Fixed spelling
+                    
+                    hasPerformance = Relationship(companyNode, "HAS_PERFORMANCE", stockNode)
+                    self.graph.merge(hasPerformance)
+                
+                print(f"✅ Loaded company: {ticker} - {companyInfo.get('companyName', '')}")
+                
+            except Exception as e:
+                print(f"❌ Error loading {ticker}: {e}")
+                print(f"   Data types: price={type(companyInfo.get('price'))}, change={type(companyInfo.get('change'))}")
+                    
+                print(f"Loaded company: {ticker} - {companyInfo.get('companyName', '')}")
     
     def loadArticles(self, newsData: List[Dict]):
         for i, article in enumerate(newsData):
