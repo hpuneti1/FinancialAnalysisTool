@@ -130,35 +130,62 @@ class FinDataCollector:
             'website': info.get('website'),
             'country': info.get('country'),
         }
+    
     def getFinancialNews(self, query: str, daysBack: int = 7) -> List[Dict]:
+        """Improved news collection with better parameters"""
         self.rateLimit()
-        fromDate = (datetime.now() - timedelta(days = daysBack)).strftime('%Y-%m-%d')
+        fromDate = (datetime.now() - timedelta(days=daysBack)).strftime('%Y-%m-%d')
         url = "https://newsapi.org/v2/everything"
+        
         params = {
             'q': query,
             'from': fromDate, 
             'apikey': self.newsKey,
-            'lang': 'en',
-            'domains': 'reuters.com, bloomberg.com, cnbc.com, marketwatch.com'
+            'language': 'en',
+            'sortBy': 'relevancy',  # Changed to relevancy for better matching
+            'pageSize': 30,  # Increased from default
+            # Better financial news sources
+            'domains': 'reuters.com,bloomberg.com,cnbc.com,marketwatch.com,yahoo.com,wsj.com,barrons.com,seekingalpha.com,fool.com'
         }
         
         try:
             response = requests.get(url, params=params)
             response.raise_for_status()
             data = response.json()
+            
             articles = []
             for article in data.get('articles', []):
+                # Better content filtering
+                title = article.get('title', '')
+                description = article.get('description', '')
+                content = article.get('content', '')
+                
+                # Combine all text for better analysis
+                full_text = f"{title} {description} {content}".lower()
+                
+                # Skip if no meaningful content
+                if len(full_text.strip()) < 100:
+                    continue
+                
+                # Skip if it's clearly not financial/business content
+                financial_keywords = ['stock', 'share', 'earnings', 'revenue', 'market', 'investment', 'company', 'financial', 'business', 'sector', 'industry']
+                if not any(keyword in full_text for keyword in financial_keywords):
+                    continue
+                
                 articles.append({
-                    'title': article.get('title'),
-                    'description': article.get('description'),
-                    'content': article.get('content'),
+                    'title': title,
+                    'description': description,
+                    'content': content,
                     'url': article.get('url'),
                     'publishedAt': article.get('publishedAt'),
                     'src': article.get('source', {}).get('name')
                 })
+            
+            print(f"  📰 Retrieved {len(articles)} relevant financial articles for '{query}'")
             return articles
+            
         except Exception as e:
-            print(f"Error fetching news for '{query}' : {e}")
+            print(f"  ❌ Error fetching news for '{query}': {e}")
             return []
     
     
@@ -166,33 +193,92 @@ class FinDataCollector:
 class FinEntityExtractor:
     def __init__(self):
         self.sectorKeywords = {
-            'Energy': ['oil', 'gas', 'energy', 'petroleum', 'drilling', 'refining'],
+            'Energy': ['oil', 'gas', 'energy', 'petroleum', 'drilling', 'refining', 'crude', 'exxon'],
             'Materials': ['mining', 'chemicals', 'steel', 'aluminum', 'construction materials'],
             'Industrials': ['aerospace', 'defense', 'machinery', 'transportation', 'logistics'],
-            'Consumer Discretionary': ['retail', 'automotive', 'media', 'entertainment', 'hotels'],
+            'Consumer Discretionary': ['retail', 'automotive', 'media', 'entertainment', 'hotels', 'tesla', 'electric vehicle', 'ev'],
             'Consumer Staples': ['food', 'beverage', 'household products', 'tobacco'],
-            'Health Care': ['pharmaceutical', 'biotech', 'medical device', 'healthcare'],
-            'Financials': ['bank', 'insurance', 'financial services', 'investment'],
-            'Information Technology': ['software', 'hardware', 'semiconductor', 'technology'],
+            'Health Care': ['pharmaceutical', 'biotech', 'medical device', 'healthcare', 'drug', 'johnson', 'pfizer'],
+            'Financials': ['bank', 'insurance', 'financial services', 'investment', 'jpmorgan', 'chase', 'banking'],
+            'Information Technology': ['software', 'hardware', 'semiconductor', 'technology', 'apple', 'microsoft', 'tech', 'ai', 'artificial intelligence'],
             'Communication Services': ['telecom', 'social media', 'telecommunications'],
             'Utilities': ['electric', 'water', 'gas utility', 'renewable energy'],
             'Real Estate': ['reit', 'real estate', 'property management']
         }
         
+        # Company name mappings for better detection
+        self.companyMappings = {
+            'apple': 'AAPL',
+            'microsoft': 'MSFT', 
+            'johnson & johnson': 'JNJ',
+            'johnson and johnson': 'JNJ',
+            'jpmorgan': 'JPM',
+            'jp morgan': 'JPM',
+            'jpmorgan chase': 'JPM',
+            'exxon': 'XOM',
+            'exxon mobil': 'XOM',
+            'tesla': 'TSLA'
+        }
+        
         self.regulatoryKeywords = {
-            'FDA': ['fda', 'drug approval', 'clinical trial', 'medical device'],
-            'Federal Reserve': ['fed', 'interest rate', 'monetary policy', 'fomc'],
-            'SEC': ['sec', 'securities', 'filing', 'investigation'],
+            'FDA': ['fda', 'drug approval', 'clinical trial', 'medical device', 'pharmaceutical'],
+            'Federal Reserve': ['fed', 'federal reserve', 'interest rate', 'monetary policy', 'fomc'],
+            'SEC': ['sec', 'securities', 'filing', 'investigation', 'securities and exchange'],
             'EPA': ['epa', 'environmental', 'emissions', 'pollution']
         }
         
+
     def extractTickers(self, text: str) -> List[str]:
         import re
+        
+        # Find ticker patterns
         tickerPattern = r'\b[A-Z]{2,5}\b'
         potentialTickers = re.findall(tickerPattern, text)
-        falsePositives = {'THE', 'AND', 'FOR', 'ARE', 'BUT', 'NOT', 'YOU', 'ALL', 'CAN', 'HER', 'WAS', 'ONE', 'OUR', 'HAD', 'WHO', 'OIL', 'GAS', 'NEW', 'NOW', 'OLD', 'SEE', 'TWO', 'WAY', 'ITS', 'DID', 'GET', 'MAY', 'HIM', 'BOY', 'DAY', 'LET', 'PUT', 'END', 'WHY', 'TRY', 'GOD', 'SIX', 'DOG', 'EAT', 'AGO', 'SIT', 'FUN', 'BAD', 'YES', 'YET', 'ARM', 'OFF', 'TOP', 'TOO', 'OLD', 'ANY', 'APP', 'ADD', 'AGE', 'ASK', 'BAG', 'BIG', 'BOX', 'BUS', 'BUY', 'CAR', 'CUT', 'DOC', 'EAR', 'EYE', 'FAR', 'FEW', 'FIX', 'FLY', 'GUN', 'GUY', 'HIT', 'HOT', 'JOB', 'KEY', 'KID', 'LAW', 'LEG', 'LOT', 'LOW', 'MAN', 'MAP', 'MOM', 'NET', 'OWN', 'PAY', 'PEN', 'PET', 'RED', 'RUN', 'SAD', 'SAT', 'SET', 'SUN', 'TAX', 'TEA', 'TEN', 'USE', 'VAN', 'WAR', 'WIN', 'WON', 'ART', 'ETC', 'CEO', 'CTO', 'CFO'}
-        return[ticker for ticker in potentialTickers if ticker not in falsePositives]
-    
+        
+        # Your target companies - highest priority
+        targetTickers = {'AAPL', 'MSFT', 'JNJ', 'JPM', 'XOM', 'TSLA'}
+        
+        # Common valid tickers (expand this list)
+        validTickers = {
+            'AAPL', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'TSLA', 'META', 'NVDA', 
+            'JPM', 'JNJ', 'V', 'PG', 'UNH', 'HD', 'DIS', 'MA', 'PYPL', 'ADBE', 
+            'NFLX', 'CRM', 'CMCSA', 'XOM', 'VZ', 'KO', 'PFE', 'INTC', 'CSCO', 
+            'ABT', 'PEP', 'TMO', 'COST', 'AVGO', 'BAC', 'WFC', 'GS', 'C', 'MS'
+        }
+        
+        # Definitely NOT tickers
+        falsePositives = {
+            'AI', 'NA', 'IT', 'OR', 'IN', 'ON', 'TO', 'OF', 'AT', 'BY', 'UP', 'SO',
+            'CNBC', 'CNN', 'BBC', 'WSJ', 'NYSE', 'NASDAQ', 'DOW', 'SNP', 'FTSE',
+            'USA', 'UK', 'EU', 'US', 'FDA', 'SEC', 'EPA', 'CEO', 'CFO', 'IPO', 'ETF',
+            'THE', 'AND', 'FOR', 'ARE', 'BUT', 'NOT', 'YOU', 'ALL', 'CAN', 'NEW'
+        }
+        
+        foundTickers = []
+        
+        # Prioritize target tickers
+        for ticker in potentialTickers:
+            if ticker in targetTickers:
+                foundTickers.append(ticker)
+            elif ticker in validTickers and ticker not in falsePositives:
+                foundTickers.append(ticker)
+        
+        # Also check for company name mentions
+        textLower = text.lower()
+        companyMappings = {
+            'apple': 'AAPL', 'microsoft': 'MSFT', 'tesla': 'TSLA',
+            'johnson & johnson': 'JNJ', 'johnson and johnson': 'JNJ',
+            'jpmorgan': 'JPM', 'jp morgan': 'JPM', 'jpmorgan chase': 'JPM',
+            'exxon': 'XOM', 'exxon mobil': 'XOM',
+            'amazon': 'AMZN', 'google': 'GOOGL', 'meta': 'META', 'facebook': 'META'
+        }
+        
+        for companyName, ticker in companyMappings.items():
+            if companyName in textLower and ticker not in foundTickers:
+                foundTickers.append(ticker)
+        
+        return list(set(foundTickers))
+        
     def classifySector(self, text: str) -> List[str]:
         textLower = text.lower()
         foundSectors = []
@@ -216,11 +302,32 @@ class RAG:
         self.companiesDB = {}
         self.newsDB = []
         self.graphBuilder = FinKG()
+
     def processSampleData(self, tickers: List[str] = None, newsQueries: List[str] = None):
         if tickers is None:
             tickers = ['AAPL', 'MSFT', 'JNJ', 'JPM', 'XOM', 'TSLA']
+        
+        # IMPROVED: Target specific companies AND broader topics
         if newsQueries is None:
-            newsQueries = ['biotech FDA approval', 'bank earnings', 'tech regulation']
+            newsQueries = [
+                # Direct company mentions with multiple keywords
+                'Apple AAPL iPhone earnings revenue quarterly',
+                'Microsoft MSFT Azure cloud computing earnings',
+                'Johnson & Johnson JNJ pharmaceutical drug development',
+                'JPMorgan Chase JPM banking financial results',
+                'Exxon Mobil XOM oil energy earnings',
+                'Tesla TSLA electric vehicle deliveries earnings',
+                
+                # Broader sector searches likely to mention your companies
+                'big tech earnings Apple Microsoft',
+                'pharmaceutical industry Johnson & Johnson drug approvals',
+                'major banks JPMorgan Chase earnings results',
+                'oil companies Exxon energy sector performance',
+                'electric vehicle market Tesla automotive',
+                'cloud computing Microsoft Azure technology'
+            ]
+        
+        # Process companies first
         for ticker in tickers:
             print(f"Processing {ticker}...")
             companyData = self.collector.getCompanyProfile(ticker)
@@ -229,13 +336,30 @@ class RAG:
             if companyData:
                 combinedData = {**companyData, **stockData}
                 self.companiesDB[ticker] = combinedData
+        
+        # Process news with better error handling and filtering
         for query in newsQueries:
-                articles = self.collector.getFinancialNews(query, daysBack=7)
-                for article in articles:
-                    tickersMentioned = self.extractor.extractTickers(article['content'] or '')
-                    sectorsMentioned = self.extractor.classifySector(article['content'] or '')
-                    regulatoryMentions = self.extractor.extractRegulatoryMentions(article['content'] or '')
-                    enhancedArticle = {
+            print(f"Searching news for: '{query}'...")
+            articles = self.collector.getFinancialNews(query, daysBack=14)  # Increased to 14 days
+            
+            if not articles:
+                print(f"  No articles found for '{query}'")
+                continue
+                
+            print(f"  Found {len(articles)} articles")
+            
+            for article in articles:
+                # Skip articles with no meaningful content
+                content = article.get('content', '') or article.get('description', '')
+                if not content or len(content) < 50:
+                    continue
+                    
+                # Extract entities
+                tickersMentioned = self.extractor.extractTickers(content)
+                sectorsMentioned = self.extractor.classifySector(content)
+                regulatoryMentions = self.extractor.extractRegulatoryMentions(content)
+                
+                enhancedArticle = {
                     **article,
                     'extractedEntities': {
                         'tickers': tickersMentioned,
@@ -243,8 +367,12 @@ class RAG:
                         'regulatoryAgencies': regulatoryMentions
                     },
                     'query_source': query
-                    }
-                    self.newsDB.append(enhancedArticle)
+                }
+                self.newsDB.append(enhancedArticle)
+        
+        print(f"\nCollected {len(self.newsDB)} total articles")
+
+
     def simpleQuery(self, question: str) -> Dict:
         questionTickers = self.extractor.extractTickers(question)
         questionSectors = self.extractor.classifySector(question)
@@ -291,7 +419,7 @@ class RAG:
   
 class FinKG:
     def __init__(self):
-        self.graph = Graph("neo4j://127.0.0.1:7687", auth = ("neo4j", "haradeep"))
+        self.graph = Graph("neo4j://127.0.0.1:7687", auth = ("neo4j", "admin123"))
     
     def clearDB(self):
         self.graph.run("MATCH (n) DETACH DELETE n")

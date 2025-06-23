@@ -38,13 +38,19 @@ class FinancialVectorDB:
                     source_counts = {}
                     
                     for meta in sample_results['metadatas']:
-                        # Count ticker mentions
-                        for ticker in meta.get('tickers', []):
-                            ticker_counts[ticker] = ticker_counts.get(ticker, 0) + 1
+                        # Count ticker mentions (now comma-separated strings)
+                        tickers_str = meta.get('tickers', '')
+                        if tickers_str:
+                            for ticker in tickers_str.split(', '):
+                                if ticker.strip():
+                                    ticker_counts[ticker.strip()] = ticker_counts.get(ticker.strip(), 0) + 1
                         
-                        # Count sector mentions
-                        for sector in meta.get('sectors', []):
-                            sector_counts[sector] = sector_counts.get(sector, 0) + 1
+                        # Count sector mentions (now comma-separated strings)
+                        sectors_str = meta.get('sectors', '')
+                        if sectors_str:
+                            for sector in sectors_str.split(', '):
+                                if sector.strip():
+                                    sector_counts[sector.strip()] = sector_counts.get(sector.strip(), 0) + 1
                         
                         # Count sources
                         source = meta.get('source', 'Unknown')
@@ -129,6 +135,7 @@ class FinancialVectorDB:
                             'sector': companyData.get('sector', ''),
                             'industry': companyData.get('industry', '')
                         })
+                        
                 enhancedContent = content
                 if companyInfo:
                     companyContext = " Companies mentioned: " + ", ".join([
@@ -141,28 +148,32 @@ class FinancialVectorDB:
                     regulatoryContext = " Regulatory bodies: " + ", ".join(agencies)
                     enhancedContent += regulatoryContext
                 
+                # Convert lists to strings for ChromaDB compatibility
+                keywords = self.extractSentimentKeywords(content)
+                
                 metadata = {
                     'articleId': f"news_{i}",
-                    'title': article.get('title', '')[:200],  # More space for OpenAI
+                    'title': article.get('title', '')[:200],
                     'source': article.get('src', ''),
                     'publishedAt': article.get('publishedAt', ''),
                     'url': article.get('url', ''),
                     'querySource': article.get('query_source', ''),
-                    # Knowledge graph links
-                    'tickers': tickers,
-                    'sectors': sectors + sectorInfo,  # Include both
-                    'agencies': agencies,
+                    
+                    # Convert lists to comma-separated strings
+                    'tickers': ', '.join(tickers) if tickers else '',
+                    'sectors': ', '.join(sectors + [c.get('sector', '') for c in companyInfo]) if sectors or companyInfo else '',
+                    'agencies': ', '.join(agencies) if agencies else '',
+                    'keywords': ', '.join(keywords) if keywords else '',
+                    
+                    # Keep scalar values as-is
                     'companyCount': len(companyInfo),
-                    # Enhanced metadata for better search
-                    'primarySector': sectorInfo[0] if sectorInfo else '',
+                    'primarySector': companyInfo[0].get('sector', '') if companyInfo else '',
                     'hasEarningsMention': any(word in content.lower() 
                                                 for word in ['earnings', 'revenue', 'profit', 'loss']),
                     'hasRegulatoryMention': len(agencies) > 0,
                     'content_length': len(content),
-                    # For filtering/search
                     'hasTickerMentions': len(tickers) > 0,
-                    'hasSectorMentions': len(sectors + sectorInfo) > 0,
-                    ' Keywords': self.extractSentimentKeywords(content)   
+                    'hasSectorMentions': len(sectors) > 0 or len(companyInfo) > 0,
                 }
                 
                 documents.append(content)
@@ -171,6 +182,7 @@ class FinancialVectorDB:
                 ids.append(f"article_{i}") 
             except Exception as e:
                 print(f"Error processing article {i}: {e}")
+        
         if textToEmbed:
             embeddings = self.getOpenAIEmbeddings(textToEmbed)
             
@@ -180,6 +192,7 @@ class FinancialVectorDB:
                 metadatas = metadatas,
                 ids = ids
             )
+            print(f"✅ Successfully embedded {len(textToEmbed)} articles")
         else:
             print("No valid articles to embed")
             
@@ -234,13 +247,13 @@ class FinancialVectorDB:
             
             booster = 0
             if metadata.get('hasTickerMentions'):
-                booster += 1
+                booster += 0.1
             if metadata.get('hasEarningsMention'):
-                booster += 1
+                booster += 0.1
             if metadata.get("hasRegulatoryMention"):
-                booster += .05
+                booster += 0.05
             if metadata.get('companyCount', 0) > 0:
-                booster += .05 * metadata['companyCount']
+                booster += 0.05 * metadata['companyCount']
             
             result['boostedScore'] = result['similarityScore'] + booster
             
@@ -255,15 +268,32 @@ class FinancialVectorDB:
         return self.semanticSearch(query, filterMetadata = sentimentFilter)
     
     def searchByCompany(self, ticker: str, query: str = "", nResults: int = 7) -> List[Dict]:
-        filterMetadata = {"tickers": {"$in": [ticker]}}
-        
+        # Since tickers are now stored as comma-separated strings, we need to search differently
         if query:
-            return self.semanticSearch(query, nResults, filterMetadata)
+            results = self.semanticSearch(query, nResults, filterMetadata=None)
+            # Filter results that contain the ticker in the tickers string
+            filtered_results = []
+            for result in results:
+                tickers_str = result['metadata'].get('tickers', '')
+                if ticker in tickers_str.split(', '):
+                    filtered_results.append(result)
+            return filtered_results[:nResults]
         else:
             try:
-                results = self.newsCollection.get(where = filterMetadata, limit = nResults)
-                return [{'content': doc, 'metadata': meta, 'article_id': id_}
-                        for doc, meta, id_ in zip(results['documents'], results['metadatas'], results['ids'])]
+                # Get all documents and filter by ticker
+                all_results = self.newsCollection.get()
+                filtered_results = []
+                
+                for i, metadata in enumerate(all_results['metadatas']):
+                    tickers_str = metadata.get('tickers', '')
+                    if ticker in tickers_str.split(', '):
+                        filtered_results.append({
+                            'content': all_results['documents'][i],
+                            'metadata': metadata,
+                            'articleId': all_results['ids'][i]
+                        })
+                
+                return filtered_results[:nResults]
             except Exception as e:
                 print(f"Error searching by company: {e}")
                 return []
@@ -277,6 +307,30 @@ class RAG:
         self.vectorDB = None
         self.openaiAPIKey = openaiAPIKEY
     
+    def debug_news_content(self):
+        """Debug function to see what news content we actually got"""
+        print(f"\n=== Debugging News Content ===")
+        print(f"Total articles: {len(self.newsDB)}")
+        
+        for i, article in enumerate(self.newsDB[:3]):  # Show first 3 articles
+            print(f"\n--- Article {i+1} ---")
+            print(f"Title: {article.get('title', 'No title')}")
+            print(f"Source: {article.get('src', 'No source')}")
+            print(f"Query Source: {article.get('query_source', 'No query')}")
+            
+            content = article.get('content', '') or article.get('description', '')
+            print(f"Content preview: {content[:200]}...")
+            
+            entities = article.get('extractedEntities', {})
+            print(f"Extracted tickers: {entities.get('tickers', [])}")
+            print(f"Extracted sectors: {entities.get('sectors', [])}")
+            print(f"Extracted agencies: {entities.get('regulatoryAgencies', [])}")
+            
+            # Test ticker extraction on this specific content
+            if content:
+                raw_tickers = self.extractor.extractTickers(content)
+                print(f"Raw ticker extraction: {raw_tickers}")
+
     def debug_news_data(self):
     
         print(f"=== Debugging News Data ===")
@@ -367,7 +421,7 @@ class RAG:
     
     
     def testSearch(self):
-        if not self.vectorDB:
+        if not self.vector_db:  # Fixed: was self.vectorDB
             print("No Vector DB")
             return
         
@@ -380,16 +434,21 @@ class RAG:
         ]
         
         for query in testQueries:
-            print(f"\nQuery: '{query}")
-            results = self.vectorDB.advFinSearch(query)
+            print(f"\nQuery: '{query}'")  # Fixed: added missing quote
+            results = self.vector_db.advFinSearch(query)  # Fixed: was self.vectorDB
             
             if results:
                 for i, result in enumerate(results, 1):
                     metadata = result['metadata']
-                    score = result.get('boostedScore', result['similiarityScore'])
+                    score = result.get('boostedScore', result['similarityScore'])  # Fixed typo: was 'similiarityScore'
                     title = metadata.get('title', 'No title')
-                    tickers = metadata.get('tickers', [])
-                    sectors = metadata.get('sectors', [])
+                    
+                    # Handle comma-separated strings
+                    tickers_str = metadata.get('tickers', '')
+                    sectors_str = metadata.get('sectors', '')
+                    tickers = [t.strip() for t in tickers_str.split(', ') if t.strip()] if tickers_str else []
+                    sectors = [s.strip() for s in sectors_str.split(', ') if s.strip()] if sectors_str else []
+                    
                     print(f"  {i}. {title[:70]}... (score: {score:.3f})")
                     if tickers:
                         print(f"     Companies: {', '.join(tickers[:3])}")
@@ -400,6 +459,7 @@ class RAG:
 if __name__ == "__main__":
     rag = RAG(openaiAPIKEY="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")
     rag.processSampleData()
+    rag.debug_news_content()
     #rag.debug_news_data()
     rag.buildKG()
     rag.buildVectorDatabase()
