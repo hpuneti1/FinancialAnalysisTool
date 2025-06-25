@@ -1,0 +1,8 @@
+streamlit
+openai
+chromadb
+py2neo
+yfinance
+pandas
+numpy
+requests
