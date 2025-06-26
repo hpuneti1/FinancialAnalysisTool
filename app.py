@@ -8,6 +8,20 @@ def main():
         layout="wide"
     )
     
+    with st.sidebar:
+        st.header("Example Queries")
+        examples = [
+            "How is Apple performing in the current market?",
+            "What's the outlook for Tesla stock?",
+            "Compare Microsoft and Google stock performance",
+            "What are the trends in the technology sector?",
+            "How are banking stocks doing lately?"
+        ]
+        
+        for example in examples:
+            if st.button(example, key=f"example_{example}"):
+                st.session_state.user_query = example
+
     st.title("📈 Financial Graph RAG Analyzer")
     st.markdown("### AI-powered financial analysis using Knowledge Graphs and Retrieval Augmented Generation")
     
@@ -28,20 +42,6 @@ def main():
     
     # Main interface
     st.header("Ask Your Financial Question")
-    
-    # Example queries
-    with st.expander("Example Queries"):
-        examples = [
-            "How is Apple performing in the current market?",
-            "What's the outlook for Tesla stock?",
-            "Compare Microsoft and Google stock performance",
-            "What are the trends in the technology sector?",
-            "How are banking stocks doing lately?"
-        ]
-        
-        for example in examples:
-            if st.button(example, key=f"example_{example}"):
-                st.session_state.user_query = example
     
     # Query input
     user_query = st.text_input(
