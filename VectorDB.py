@@ -1,6 +1,7 @@
 import streamlit as st
 import chromadb
 from openai import OpenAI
+import numpy as np
 
 class VectorDatabase:
     def __init__(self, openai_key: str):
@@ -13,7 +14,10 @@ class VectorDatabase:
         except:
             pass
         
-        self.collection = self.chroma_client.create_collection("financial_news")
+        self.collection = self.chroma_client.create_collection(
+            "financial_news",
+            metadata={"hnsw:space": "cosine"}
+        )
     
     def get_embeddings(self, texts: list[str]) -> list[list[float]]:
         try:
@@ -49,7 +53,7 @@ class VectorDatabase:
             metadatas.append(metadata)
             ids.append(f"article_{i}")
         
-        embeddings = self.get_embeddings(documents)
+        embeddings = np.array(self.get_embeddings(documents), dtype=np.float32)
         
         self.collection.add(
             documents=documents,
@@ -68,15 +72,23 @@ class VectorDatabase:
             )
             
             formatted_results = []
-            if results['documents'] and results['documents'][0]:
-                for i in range(len(results['documents'][0])):
-                    result = {
-                        'content': results['documents'][0][i],
-                        'metadata': results['metadatas'][0][i],
-                        'similarity_score': 1 - results['distances'][0][i],
-                        'id': results['ids'][0][i]
-                    }
-                    formatted_results.append(result)
+            documents = results.get('documents', [[]])
+            documents = documents[0] if documents and len(documents) > 0 else []
+            metadatas = results.get('metadatas', [[]])
+            metadatas = metadatas[0] if metadatas and len(metadatas) > 0 else []
+            distances = results.get('distances', [[]])
+            distances = distances[0] if distances and len(distances) > 0 else []
+            ids = results.get('ids', [[]])
+            ids = ids[0] if ids and len(ids) > 0 else []
+
+            for content, metadata, distance, id_ in zip(documents, metadatas, distances, ids):
+                result = {
+                    'content': content,
+                    'metadata': metadata,
+                    'similarity_score': 1 - distance,
+                    'id': id_
+                }
+                formatted_results.append(result)
             
             return formatted_results
         except Exception as e:

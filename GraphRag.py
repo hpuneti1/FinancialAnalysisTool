@@ -50,11 +50,25 @@ class GraphRAGSystem:
                 sector_name = sector_data.get('sector', '')
                 search_queries.append(f"{sector_name} sector outlook analysis")
         
+        # --- Generate query variants for RSS search ---
+        query_variants = set()
+        for company in [c.get('name', '') for c in extraction_details.get('companies', []) if c.get('name', '')]:
+            query_variants.add(company)
+            if " " in company:
+                query_variants.add(company.split()[0])
+        for ticker in mentioned_tickers:
+            query_variants.add(ticker)
+        for sector in mentioned_sectors:
+            query_variants.add(sector)
+        if not query_variants:
+            query_variants.add(user_query)
+        # ------------------------------------------------
+
         all_articles = []
         all_tickers = []
         
         for query in search_queries[:4]:  
-            articles = self.data_collector.search_news(query, days_back=21)
+            articles = self.data_collector.search_news(query, days_back=21, query_variants=list(query_variants), entity_extractor=self.entity_extractor)
             for article in articles:
                 article_tickers = self.entity_extractor.extract_tickers(
                     f"{article.get('title', '')} {article.get('content', '')}"
@@ -64,11 +78,86 @@ class GraphRAGSystem:
 
                 self.knowledge_graph.add_news_article(article, article_tickers)
         
-        if all_articles:
-            self.vector_db.add_articles(all_articles, all_tickers)
+        # --- Debug: Print number of articles after RSS fetch ---
+        print(f"Fetched {len(all_articles)} articles from RSS feeds.")
+        # ------------------------------------------------------
+
+        # If entity_extractor is provided, filter articles for relevance
+        if self.entity_extractor is not None:
+            relevant_articles = []
+            for article in all_articles:
+                entities = self.entity_extractor.extract_entities(article['title'] + ' ' + article['content'])
+                # Check if any query_variant matches a company name, ticker, or sector
+                found = False
+                for variant in query_variants:
+                    if variant in [c['name'] for c in entities.get('companies', [])]:
+                        found = True
+                    if variant in entities.get('tickers_mentioned', []):
+                        found = True
+                    if variant in [s['sector'] for s in entities.get('sectors', [])]:
+                        found = True
+                if found:
+                    relevant_articles.append(article)
+            articles = relevant_articles
+            # --- Debug: Print number of articles after entity extraction filtering ---
+            print(f"{len(articles)} articles after entity extraction filtering.")
+            # ------------------------------------------------------------------------
+        else:
+            articles = all_articles
+
+        # Optionally, deduplicate by URL
+        seen = set()
+        unique_articles = []
+        for article in articles:
+            if article['url'] not in seen:
+                unique_articles.append(article)
+                seen.add(article['url'])
+        # --- Debug: Print number of unique articles after deduplication ---
+        print(f"{len(unique_articles)} unique articles after deduplication.")
+        # ------------------------------------------------------------------
+
+        # --- Deduplicate articles by URL before adding to vector DB ---
+        unique_articles_db = []
+        unique_tickers_db = []
+        seen_urls_db = set()
+        for article, tickers in zip(all_articles, all_tickers):
+            url = article.get('url')
+            if url and url not in seen_urls_db:
+                unique_articles_db.append(article)
+                unique_tickers_db.append(tickers)
+                seen_urls_db.add(url)
+        # ------------------------------------------------------------
+
+        if unique_articles_db:
+            self.vector_db.add_articles(unique_articles_db, unique_tickers_db)
         
         relevant_articles = self.vector_db.search(user_query, n_results=8)
         
+        # --- Show all articles regardless of similarity score for debugging ---
+        print(f"{len(relevant_articles)} articles after vector DB search (no score filtering).")
+        for a in relevant_articles:
+            print(f"Title: {a['title'] if 'title' in a else a.get('metadata', {}).get('title', '')}, Score: {a.get('similarity_score', 0)}")
+        # ---------------------------------------------------------------------
+
+        # --- Stricter entity-based post-filtering: only include articles where the main company matches a query variant ---
+        filtered_articles = []
+        for article in relevant_articles:
+            content = article.get('content', '')
+            if not content and 'metadata' in article:
+                content = article['metadata'].get('title', '')
+            entities = self.entity_extractor.extract_entities(content)
+            companies = entities.get('companies', [])
+            if companies:
+                main_company = companies[0]
+                if (
+                    main_company.get('name') in query_variants or
+                    main_company.get('ticker') in query_variants
+                ):
+                    filtered_articles.append(article)
+        relevant_articles = filtered_articles
+        print(f"{len(relevant_articles)} articles after stricter entity-based post-filtering (main company match).")
+        # -------------------------------------------------------------------------
+
         graph_context = ""
         for ticker in mentioned_tickers:
             context = self.knowledge_graph.query_company_context(ticker)
@@ -177,6 +266,6 @@ class GraphRAGSystem:
                 temperature=0.2
             )
             
-            return response.choices[0].message.content
+            return response.choices[0].message.content or ""
         except Exception as e:
             return f"Error generating response: {e}"

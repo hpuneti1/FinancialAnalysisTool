@@ -4,6 +4,8 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import time
 import re
+import feedparser
+from typing import Optional
 
 class FinancialDataCollector:
     def __init__(self):
@@ -43,94 +45,99 @@ class FinancialDataCollector:
                     'companyName': info.get('longName', ''),
                     'sector': info.get('sector', ''),
                     'industry': info.get('industry', ''),
-                    'lastUpdated': str(hist.index[-1].date())
+                    'lastUpdated': str(hist.index[-1])
                 }
             return {}
         except Exception as e:
             st.warning(f"Could not fetch data for {ticker}: {e}")
             return {}
     
-    def search_news(self, query: str, days_back: int = 7) -> list[dict]:
-        self.rate_limit()
-        from_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
-        url = "https://newsapi.org/v2/everything"
-        
-        params = {
-            'q': query,
-            'from': from_date,
-            'apikey': self.news_api_key,
-            'language': 'en',
-            'sortBy': 'relevancy',
-            'pageSize': 30, 
-        }
-        
-        try:
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
-            
-            articles = []
-            query_words = query.lower().split()
-            
-            meaningful_words = [word for word in query_words 
-                            if len(word) > 2 and word not in ['the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'how', 'what', 'when', 'where']]
-            
-            for article in data.get('articles', []):
-                title = article.get('title', '')
-                description = article.get('description', '')
-                content = article.get('content', '')
-                
-                title_lower = title.lower()
-                description_lower = description.lower()
-                content_lower = content.lower()
-                full_text = f"{title_lower} {description_lower} {content_lower}"
-                
-                if len(full_text.strip()) < 100:
-                    continue
+    def fetch_from_rss(self, query, feed_url):
+        feed = feedparser.parse(feed_url)
+        articles = []
+        for entry in feed.entries:
+            title = getattr(entry, 'title', '')
+            summary = getattr(entry, 'summary', '')
+            if query.lower() in title.lower() or query.lower() in summary.lower():
+                articles.append({
+                    'title': title,
+                    'description': summary,
+                    'content': summary,
+                    'url': getattr(entry, 'link', ''),
+                    'publishedAt': getattr(entry, 'published', ''),
+                    'source': getattr(feed.feed, 'title', '')
+                })
+        return articles
+    
+    def fetch_all_from_rss(self, feed_url):
+        feed = feedparser.parse(feed_url)
+        articles = []
+        for entry in feed.entries:
+            title = getattr(entry, 'title', '')
+            summary = getattr(entry, 'summary', '')
+            articles.append({
+                'title': title,
+                'description': summary,
+                'content': summary,
+                'url': getattr(entry, 'link', ''),
+                'publishedAt': getattr(entry, 'published', ''),
+                'source': getattr(feed.feed, 'title', '')
+            })
+        return articles
 
-                relevance_score = 0
-                
-                for word in meaningful_words:
-                    if word in title_lower:
-                        relevance_score += 3
-                    elif word in description_lower:
-                        relevance_score += 2
-                    elif word in content_lower:
-                        relevance_score += 1
-            
-                ticker_pattern = r'\b[A-Z]{2,5}\b'
-                query_tickers = re.findall(ticker_pattern, query)
-                for ticker in query_tickers:
-                    if ticker in full_text.upper():
-                        relevance_score += 4
-                
-                financial_keywords = ['stock', 'share', 'earnings', 'revenue', 'market', 'investment', 'company', 'financial', 'trading', 'price', 'analyst', 'forecast']
-                has_financial = any(keyword in full_text for keyword in financial_keywords)
-                
-                context_keywords = ['quarterly', 'annual', 'guidance', 'outlook', 'performance', 'results', 'beat', 'miss', 'estimates']
-                context_bonus = sum(1 for keyword in context_keywords if keyword in full_text)
-                relevance_score += context_bonus
-                
-                if relevance_score >= 2 and has_financial:
-                    articles.append({
-                        'title': title,
-                        'description': description,
-                        'content': content,
-                        'url': article.get('url'),
-                        'publishedAt': article.get('publishedAt'),
-                        'source': article.get('source', {}).get('name'),
-                        'relevance_score': relevance_score
-                    })
-            
-            articles.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
-            
-            print(f"Query: '{query}' -> Found {len(articles)} relevant articles")
-            if articles:
-                top_scores = [article.get('relevance_score', 0) for article in articles[:3]]
-                print(f"Top relevance scores: {top_scores}")
-            
-            return articles[:15] 
-            
-        except Exception as e:
-            st.warning(f"News API unavailable: {e}")
-            return []
+    def search_news(self, query: str, days_back: int = 7, query_variants: Optional[list] = None, entity_extractor=None) -> list[dict]:
+        self.rate_limit()
+        articles = []
+
+        # List of RSS feeds to search
+        rss_feeds = [
+            "https://finance.yahoo.com/news/rssindex",
+            "http://feeds.reuters.com/reuters/businessNews",
+            "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+            "https://www.marketwatch.com/rss/topstories",
+            "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",  # WSJ
+            "https://www.ft.com/?format=rss",                # Financial Times
+            "https://techcrunch.com/feed/",                  # TechCrunch
+            "https://www.theverge.com/rss/index.xml",        # The Verge
+            "https://www.bloomberg.com/feed/podcast/etf-report.xml", # Bloomberg ETF (example)
+            # Add more as needed
+        ]
+
+        # If query_variants not provided, use the original query
+        if query_variants is None:
+            query_variants = [query]
+
+        # Fetch all articles from all feeds
+        all_articles = []
+        for feed_url in rss_feeds:
+            all_articles += self.fetch_all_from_rss(feed_url)
+
+        # If entity_extractor is provided, filter articles for relevance
+        if entity_extractor is not None:
+            relevant_articles = []
+            for article in all_articles:
+                entities = entity_extractor.extract_entities(article['title'] + ' ' + article['content'])
+                # Check if any query_variant matches a company name, ticker, or sector
+                found = False
+                for variant in query_variants:
+                    if variant in [c['name'] for c in entities.get('companies', [])]:
+                        found = True
+                    if variant in entities.get('tickers_mentioned', []):
+                        found = True
+                    if variant in [s['sector'] for s in entities.get('sectors', [])]:
+                        found = True
+                if found:
+                    relevant_articles.append(article)
+            articles = relevant_articles
+        else:
+            articles = all_articles
+
+        # Optionally, deduplicate by URL
+        seen = set()
+        unique_articles = []
+        for article in articles:
+            if article['url'] not in seen:
+                unique_articles.append(article)
+                seen.add(article['url'])
+
+        return unique_articles[:50]

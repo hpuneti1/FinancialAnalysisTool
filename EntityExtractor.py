@@ -56,6 +56,8 @@ class EntityExtractor:
             )
             
             content = response.choices[0].message.content
+            if not isinstance(content, str):
+                content = ""
             entities = json.loads(content)
             
             self.extraction_cache[text] = entities
@@ -64,6 +66,7 @@ class EntityExtractor:
             
         except Exception as e:
             print(f"LLM entity extraction failed: {e}")
+            return {}
         
     
     def extract_tickers(self, text: str) -> list[str]:
