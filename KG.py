@@ -1,11 +1,10 @@
 import streamlit as st
 from py2neo import Graph, Node, Relationship
-from typing import Dict, List
 
 class FinancialKnowledgeGraph:
     def __init__(self):
         try:
-            self.graph = Graph("neo4j://localhost:7687", auth=("neo4j", "admin123"))
+            self.graph = Graph("neo4j://127.0.0.1:7687", auth=("neo4j", "admin123"))
             self.graph.run("MATCH () RETURN count(*) as count")
             st.success("Connected to Neo4j")
         except Exception as e:
@@ -32,7 +31,7 @@ class FinancialKnowledgeGraph:
         except Exception as e:
             st.error(f"Graph initialization error: {e}")
     
-    def add_company(self, company_data: Dict):
+    def add_company(self, company_data: dict):
         if not self.graph or not company_data:
             return
         
@@ -85,7 +84,7 @@ class FinancialKnowledgeGraph:
         except Exception as e:
             st.warning(f"Error adding company {company_data.get('ticker', 'Unknown')}: {e}")
     
-    def add_news_article(self, article: Dict, mentioned_tickers: List[str]):
+    def add_news_article(self, article: dict, mentioned_tickers: list[str]):
         if not self.graph or not article:
             return
         

@@ -1,7 +1,6 @@
 import streamlit as st
 import chromadb
 from openai import OpenAI
-from typing import Dict, List
 
 class VectorDatabase:
     def __init__(self, openai_key: str):
@@ -16,7 +15,7 @@ class VectorDatabase:
         
         self.collection = self.chroma_client.create_collection("financial_news")
     
-    def get_embeddings(self, texts: List[str]) -> List[List[float]]:
+    def get_embeddings(self, texts: list[str]) -> list[list[float]]:
         try:
             response = self.openai_client.embeddings.create(
                 model="text-embedding-3-small",
@@ -27,7 +26,7 @@ class VectorDatabase:
             st.error(f"Embedding error: {e}")
             return [[0.0] * 1536] * len(texts)
     
-    def add_articles(self, articles: List[Dict], mentioned_tickers: List[List[str]]):
+    def add_articles(self, articles: list[dict], mentioned_tickers: list[list[str]]):
         if not articles:
             return
         
@@ -59,7 +58,7 @@ class VectorDatabase:
             ids=ids
         )
     
-    def search(self, query: str, n_results: int = 5) -> List[Dict]:
+    def search(self, query: str, n_results: int = 5) -> list[dict]:
         try:
             query_embedding = self.get_embeddings([query])[0]
             
