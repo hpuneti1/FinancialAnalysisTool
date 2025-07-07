@@ -128,5 +128,3 @@ class EntityExtractor:
             "cached_extractions": len(self.extraction_cache),
             "cache_keys": list(self.extraction_cache.keys())[:5]
         }
-    
-    

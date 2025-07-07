@@ -32,25 +32,22 @@ class GraphRAGSystem:
         search_queries.append(user_query)
         
         for company_data in extraction_details.get('companies', []):
-            if company_data.get('confidence', 0) > 0.7:  # High confidence companies
+            if company_data.get('confidence', 0) > 0.7:
                 company_name = company_data.get('name', '')
                 ticker = company_data.get('ticker', '')
                 if company_name and ticker:
                     search_queries.append(f"{company_name} {ticker} stock analysis earnings")
         
-        # Stock group queries
         for group_data in extraction_details.get('stock_groups', []):
             if group_data.get('confidence', 0) > 0.6:
                 group_name = group_data.get('group', '')
                 search_queries.append(f"{group_name} stocks performance analysis")
         
-        # Sector-specific queries
         for sector_data in extraction_details.get('sectors', []):
             if sector_data.get('confidence', 0) > 0.6:
                 sector_name = sector_data.get('sector', '')
                 search_queries.append(f"{sector_name} sector outlook analysis")
         
-        # --- Generate query variants for RSS search ---
         query_variants = set()
         for company in [c.get('name', '') for c in extraction_details.get('companies', []) if c.get('name', '')]:
             query_variants.add(company)
@@ -62,7 +59,6 @@ class GraphRAGSystem:
             query_variants.add(sector)
         if not query_variants:
             query_variants.add(user_query)
-        # ------------------------------------------------
 
         all_articles = []
         all_tickers = []
@@ -78,11 +74,8 @@ class GraphRAGSystem:
 
                 self.knowledge_graph.add_news_article(article, article_tickers)
         
-        # --- Debug: Print number of articles after RSS fetch ---
         print(f"Fetched {len(all_articles)} articles from RSS feeds.")
-        # ------------------------------------------------------
 
-        # If entity_extractor is provided, filter articles for relevance
         if self.entity_extractor is not None:
             relevant_articles = []
             for article in all_articles:
@@ -105,7 +98,6 @@ class GraphRAGSystem:
         else:
             articles = all_articles
 
-        # Optionally, deduplicate by URL
         seen = set()
         unique_articles = []
         for article in articles:

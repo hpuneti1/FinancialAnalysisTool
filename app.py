@@ -22,8 +22,8 @@ def main():
             if st.button(example, key=f"example_{example}"):
                 st.session_state.user_query = example
 
-    st.title("Financial Graph RAG Analyzer")
-    st.markdown("### AI-powered financial analysis using Knowledge Graphs and Retrieval Augmented Generation")
+    st.title("Financial Analyzer")
+    st.markdown("###Financial analysis using Knowledge Graphs and Retrieval Augmented Generation")
     
     openai_key = "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"
     

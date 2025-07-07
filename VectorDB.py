@@ -8,7 +8,6 @@ class VectorDatabase:
         self.openai_client = OpenAI(api_key=openai_key)
         self.chroma_client = chromadb.Client()
         
-        # Reset collection
         try:
             self.chroma_client.delete_collection("financial_news")
         except:
