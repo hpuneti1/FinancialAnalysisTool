@@ -7,7 +7,32 @@ class EntityExtractor:
     def __init__(self, open_api_key: str):
         self.openai_client = OpenAI(api_key=open_api_key)
         self.extraction_cache = {}
-    
+        self.sector_tickers = {
+                'Technology': ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NVDA', 'CRM', 'ORCL', 'ADBE'],
+                'Banking': ['JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'USB', 'PNC', 'TFC', 'COF'],
+                'Financial': ['JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'BRK-B', 'V', 'MA', 'AXP'],
+                'Healthcare': ['JNJ', 'PFE', 'UNH', 'ABT', 'TMO', 'DHR', 'BMY', 'ABBV', 'MRK', 'LLY'],
+                'Energy': ['XOM', 'CVX', 'COP', 'EOG', 'SLB', 'PSX', 'VLO', 'MPC', 'OXY', 'KMI'],
+                'Consumer Discretionary': ['AMZN', 'TSLA', 'HD', 'MCD', 'NKE', 'SBUX', 'TJX', 'LOW', 'TGT', 'F'],
+                'Consumer Staples': ['PG', 'KO', 'PEP', 'WMT', 'COST', 'CL', 'KHC', 'GIS', 'K', 'HSY'],
+                'Industrials': ['BA', 'CAT', 'GE', 'MMM', 'HON', 'UPS', 'RTX', 'LMT', 'DE', 'UNP'],
+                'Materials': ['LIN', 'APD', 'SHW', 'ECL', 'FCX', 'NEM', 'DOW', 'DD', 'PPG', 'IFF'],
+                'Communication Services': ['GOOGL', 'META', 'DIS', 'VZ', 'T', 'NFLX', 'CMCSA', 'TMUS', 'CHTR', 'DISH'],
+                'Utilities': ['NEE', 'DUK', 'SO', 'D', 'AEP', 'EXC', 'XEL', 'SRE', 'PEG', 'ED'],
+                'Real Estate': ['AMT', 'PLD', 'CCI', 'EQIX', 'SPG', 'O', 'WELL', 'DLR', 'PSA', 'EQR']
+            }
+            
+        # Add stock group mappings
+        self.stock_groups = {
+            'FAANG': ['META', 'AAPL', 'AMZN', 'NFLX', 'GOOGL'],
+            'Magnificent 7': ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META'],
+            'Big Tech': ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NVDA', 'CRM', 'ORCL'],
+            'Semiconductor': ['NVDA', 'AMD', 'INTC', 'TSM', 'AVGO', 'QCOM', 'TXN', 'AMAT', 'LRCX', 'KLAC'],
+            'Banking': ['JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'USB', 'PNC', 'TFC', 'COF'],
+            'REIT': ['AMT', 'PLD', 'CCI', 'EQIX', 'SPG', 'O', 'WELL', 'DLR', 'PSA', 'EQR'],
+            'EV': ['TSLA', 'RIVN', 'LCID', 'NIO', 'XPEV', 'LI', 'F', 'GM'],
+            'Biotech': ['GILD', 'AMGN', 'BIIB', 'REGN', 'VRTX', 'ILMN', 'MRNA', 'BNTX']
+            }
     def extract_entities(self, text: str) -> dict:
         if text in self.extraction_cache:
             return self.extraction_cache[text]
@@ -28,7 +53,10 @@ class EntityExtractor:
                 {"sector": "Technology", "confidence": 0.90},
                 {"sector": "Healthcare", "confidence": 0.75}
             ],
-            "tickers_mentioned": ["AAPL", "MSFT", "GOOGL"]
+            "tickers_mentioned": ["AAPL", "MSFT", "GOOGL"],
+            "sector_queries": [
+                {"sector": "Technology", "query_type": "broad_sector", "confidence": 0.95}
+            ]
         }
 
         Rules:
@@ -39,7 +67,8 @@ class EntityExtractor:
         5. Map sectors to: Technology, Healthcare, Financial, Energy, Consumer Discretionary, Consumer Staples, Industrials, Materials, Communication Services, Utilities, Real Estate
         6. Handle variations: "Apple" = AAPL, "Microsoft Corp" = MSFT, "Alphabet" = GOOGL
         7. If text mentions stock groups, expand them to individual tickers
-        8. Return empty arrays if no entities found
+        8. For broad sector queries like "technology sector trends" or "banking stocks", add to sector_queries
+        9. Return empty arrays if no entities found
         """
         
         user_prompt = f"Extract the financial entities contained in this text: {text}"
@@ -70,26 +99,67 @@ class EntityExtractor:
         
     
     def extract_tickers(self, text: str) -> list[str]:
-        entities = self.extract_entities(text)
-        all_tickers = []
-        for company in entities.get('companies', []):
-            if company.get('confidence', 0) > 0.5:
-                all_tickers.append(company['ticker'])
-                
-        for group in entities.get('stock_groups', []):
-            if group.get('confidence', 0) > 0.5:
-                all_tickers.extend(group['companies']) 
+            entities = self.extract_entities(text)
+            all_tickers = []
+            
+            # Get tickers from companies
+            for company in entities.get('companies', []):
+                if company.get('confidence', 0) > 0.5:
+                    all_tickers.append(company['ticker'])
+                    
+            # Get tickers from stock groups
+            for group in entities.get('stock_groups', []):
+                if group.get('confidence', 0) > 0.5:
+                    all_tickers.extend(group['companies']) 
+            
+            all_tickers.extend(entities.get('tickers_mentioned', []))
+            
+            for sector_query in entities.get('sector_queries', []):
+                if sector_query.get('confidence', 0) > 0.6:
+                    sector_name = sector_query['sector']
+                    # Map sector to representative tickers
+                    sector_tickers = self.get_sector_tickers(sector_name)
+                    all_tickers.extend(sector_tickers)
+            
+            for sector_data in entities.get('sectors', []):
+                if sector_data.get('confidence', 0) > 0.7:
+                    sector_name = sector_data['sector']
+                    sector_tickers = self.get_sector_tickers(sector_name)
+                    all_tickers.extend(sector_tickers)
+            
+            unique_tickers = list(set(all_tickers))
+            validated_tickers = []
+            
+            for ticker in unique_tickers:
+                if self._is_valid_ticker_format(ticker):
+                    validated_tickers.append(ticker) 
+            return validated_tickers
         
-        all_tickers.extend(entities.get('tickers_mentioned', []))
+    def get_sector_tickers(self, sector_name: str) -> list[str]:
+        """Get representative tickers for a sector"""
+        if sector_name in self.sector_tickers:
+            return self.sector_tickers[sector_name][:5]
+        sector_variations = {
+            'tech': 'Technology',
+            'technology': 'Technology',
+            'bank': 'Banking',
+            'banking': 'Banking',
+            'finance': 'Financial',
+            'financial': 'Financial',
+            'healthcare': 'Healthcare',
+            'pharma': 'Healthcare',
+            'energy': 'Energy',
+            'oil': 'Energy',
+            'consumer': 'Consumer Discretionary',
+            'retail': 'Consumer Discretionary'
+        }
         
-        unique_tickers = list(set(all_tickers))
-        validated_tickers = []
+        normalized_sector = sector_variations.get(sector_name.lower(), sector_name)
+        if normalized_sector in self.sector_tickers:
+            return self.sector_tickers[normalized_sector][:5]
         
-        for ticker in unique_tickers:
-            if self._is_valid_ticker_format(ticker):
-                validated_tickers.append(ticker) 
-        return validated_tickers
-          
+        return []
+
     def extract_sectors(self, text: str) -> list[str]:
         entities = self.extract_entities(text)
         sectors = []

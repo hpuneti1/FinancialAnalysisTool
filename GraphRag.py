@@ -20,6 +20,26 @@ class GraphRAGSystem:
         
         extraction_details = self.entity_extractor.get_extraction_details(user_query)
         
+        # Enhanced: Handle sector queries with representative tickers
+        sector_tickers = []
+        if extraction_details.get('sector_queries'):
+            for sector_query in extraction_details['sector_queries']:
+                if sector_query.get('confidence', 0) > 0.6:
+                    sector_name = sector_query['sector']
+                    tickers = self.entity_extractor.get_sector_tickers(sector_name)
+                    sector_tickers.extend(tickers)
+                    print(f"Added {len(tickers)} tickers for {sector_name} sector: {tickers}")
+        
+        # Combine all tickers
+        all_tickers = list(set(mentioned_tickers + sector_tickers))
+        
+        stock_data = {}
+        for ticker in all_tickers:  # Changed from mentioned_tickers to all_tickers
+            data = self.data_collector.get_stock_data(ticker)
+            if data:
+                stock_data[ticker] = data
+                self.knowledge_graph.add_company(data)
+        
         stock_data = {}
         for ticker in mentioned_tickers:
             data = self.data_collector.get_stock_data(ticker)
@@ -29,7 +49,11 @@ class GraphRAGSystem:
         
         search_queries = []
         
-        search_queries.append(user_query)
+        for sector_query in extraction_details.get('sector_queries', []):
+            if sector_query.get('confidence', 0) > 0.6:
+                sector_name = sector_query['sector']
+                search_queries.append(f"{sector_name} sector performance trends analysis")
+                search_queries.append(f"{sector_name} stocks outlook earnings")
         
         for company_data in extraction_details.get('companies', []):
             if company_data.get('confidence', 0) > 0.7:
@@ -53,17 +77,20 @@ class GraphRAGSystem:
             query_variants.add(company)
             if " " in company:
                 query_variants.add(company.split()[0])
-        for ticker in mentioned_tickers:
+        for ticker in all_tickers:  # Changed from mentioned_tickers to all_tickers
             query_variants.add(ticker)
         for sector in mentioned_sectors:
             query_variants.add(sector)
+        # Add sector query terms
+        for sector_query in extraction_details.get('sector_queries', []):
+            query_variants.add(sector_query['sector'])
         if not query_variants:
             query_variants.add(user_query)
 
         all_articles = []
         all_tickers = []
         
-        for query in search_queries[:4]:  
+        for query in search_queries[:6]:  
             articles = self.data_collector.search_news(query, days_back=21, query_variants=list(query_variants), entity_extractor=self.entity_extractor)
             for article in articles:
                 article_tickers = self.entity_extractor.extract_tickers(
@@ -132,26 +159,53 @@ class GraphRAGSystem:
         # ---------------------------------------------------------------------
 
         # --- Stricter entity-based post-filtering: only include articles where the main company matches a query variant ---
-        filtered_articles = []
-        for article in relevant_articles:
-            content = article.get('content', '')
-            if not content and 'metadata' in article:
-                content = article['metadata'].get('title', '')
-            entities = self.entity_extractor.extract_entities(content)
-            companies = entities.get('companies', [])
-            if companies:
-                main_company = companies[0]
-                if (
-                    main_company.get('name') in query_variants or
-                    main_company.get('ticker') in query_variants
-                ):
+        is_sector_query = bool(extraction_details.get('sector_queries'))
+        
+        if is_sector_query:
+            filtered_articles = []
+            for article in relevant_articles:
+                content = article.get('content', '')
+                if not content and 'metadata' in article:
+                    content = article['metadata'].get('title', '')
+                entities = self.entity_extractor.extract_entities(content)
+                
+                article_tickers = entities.get('tickers_mentioned', [])
+                if any(ticker in all_tickers for ticker in article_tickers):
                     filtered_articles.append(article)
-        relevant_articles = filtered_articles
-        print(f"{len(relevant_articles)} articles after stricter entity-based post-filtering (main company match).")
+                    continue
+                
+                companies = entities.get('companies', [])
+                if any(company.get('ticker') in all_tickers for company in companies):
+                    filtered_articles.append(article)
+                    continue
+                
+                sectors = [s['sector'] for s in entities.get('sectors', [])]
+                if any(sector in mentioned_sectors for sector in sectors):
+                    filtered_articles.append(article)
+            
+            relevant_articles = filtered_articles
+            print(f"{len(relevant_articles)} articles after sector-aware filtering.")
+        else:
+            filtered_articles = []
+            for article in relevant_articles:
+                content = article.get('content', '')
+                if not content and 'metadata' in article:
+                    content = article['metadata'].get('title', '')
+                entities = self.entity_extractor.extract_entities(content)
+                companies = entities.get('companies', [])
+                if companies:
+                    main_company = companies[0]
+                    if (
+                        main_company.get('name') in query_variants or
+                        main_company.get('ticker') in query_variants
+                    ):
+                        filtered_articles.append(article)
+            relevant_articles = filtered_articles
+            print(f"{len(relevant_articles)} articles after company-specific filtering.")
         # -------------------------------------------------------------------------
 
         graph_context = ""
-        for ticker in mentioned_tickers:
+        for ticker in all_tickers:
             context = self.knowledge_graph.query_company_context(ticker)
             if context:
                 graph_context += context + " "
@@ -166,13 +220,13 @@ class GraphRAGSystem:
         
         return {
             'response': response,
-            'mentioned_tickers': mentioned_tickers,
+            'mentioned_tickers': all_tickers,
             'mentioned_sectors': mentioned_sectors,
             'stock_data': stock_data,
             'relevant_articles': relevant_articles,
             'graph_context': graph_context,
             'extraction_details': extraction_details, 
-            'search_queries_used': search_queries[:4],
+            'search_queries_used': search_queries[:6],
             'cache_stats': self.entity_extractor.get_cache_stats()
         }
     
@@ -202,8 +256,17 @@ class GraphRAGSystem:
             groups_found = [f"{g['group']} (confidence: {g['confidence']:.2f})" 
                           for g in extraction_details['stock_groups']]
             extraction_context += f"Stock groups: {', '.join(groups_found)}. "
+
+        if extraction_details.get('sector_queries'):
+            sector_queries_found = [f"{sq['sector']} sector analysis (confidence: {sq['confidence']:.2f})" 
+                                  for sq in extraction_details['sector_queries']]
+            extraction_context += f"Sector queries: {', '.join(sector_queries_found)}. "
         
-        system_prompt = """
+        # Detect if this is a sector-wide analysis
+        is_sector_analysis = bool(extraction_details.get('sector_queries')) or len(stock_data) > 3
+
+        
+        system_prompt = f"""
             You are a senior financial analyst providing detailed investment analysis. 
 
             IMPORTANT FORMATTING RULES:
@@ -212,6 +275,9 @@ class GraphRAGSystem:
             - Use bullet points with simple dashes (-)
             - Keep formatting minimal and readable
             - Do not use markdown formatting like **bold** or *italics*
+            
+            {"SECTOR ANALYSIS MODE: You are analyzing a broad sector or group of stocks. Provide sector-wide trends, compare performance across companies, and give sector outlook." if is_sector_analysis else "COMPANY ANALYSIS MODE: Focus on specific companies mentioned in the query."}
+            
             Your responses should:
             - Provide specific, actionable insights based on the data
             - Analyze both current performance and future outlook
@@ -220,6 +286,7 @@ class GraphRAGSystem:
             - Be comprehensive but clear and well-structured
             - Include both opportunities and risks
             - Reference the entity extraction confidence when relevant
+            {"- For sector analysis: Compare performance across companies, identify sector leaders/laggards, discuss sector-wide trends" if is_sector_analysis else ""}
             """
         
         user_prompt = f"""
@@ -254,7 +321,7 @@ class GraphRAGSystem:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_tokens=1000,
+                max_tokens=1200,
                 temperature=0.2
             )
             

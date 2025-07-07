@@ -72,10 +72,15 @@ def main():
                 
                 with col2:
                     st.subheader("Detected Entities")
+
                     if result['mentioned_tickers']:
-                        st.write("**Companies:**", ", ".join(result['mentioned_tickers']))
+                        ticker_strings = [str(ticker) for ticker in result['mentioned_tickers'] if ticker]
+                        st.write("**Companies:**", ", ".join(ticker_strings))
+
                     if result['mentioned_sectors']:
-                        st.write("**Sectors:**", ", ".join(result['mentioned_sectors']))
+                        sector_strings = [str(sector) for sector in result['mentioned_sectors'] if sector]
+                        st.write("**Sectors:**", ", ".join(sector_strings))
+
                     if not result['mentioned_tickers'] and not result['mentioned_sectors']:
                         st.info("No specific companies or sectors detected")
             
@@ -90,7 +95,9 @@ def main():
                         for company in extraction['companies']:
                             confidence = company.get('confidence', 0)
                             confidence_color = "🟢" if confidence > 0.8 else "🟡" if confidence > 0.6 else "🔴"
-                            st.write(f"{confidence_color} {company['name']} → {company['ticker']} (confidence: {confidence:.2f})")
+                            company_name = str(company.get('name', 'Unknown'))
+                            company_ticker = str(company.get('ticker', 'Unknown'))
+                            st.write(f"{confidence_color} {company_name} → {company_ticker} (confidence: {confidence:.2f})")
                     
                     if extraction.get('stock_groups'):
                         st.write("**Stock Groups Identified:**")
@@ -98,9 +105,11 @@ def main():
                             confidence = group.get('confidence', 0)
                             confidence_color = "🟢" if confidence > 0.8 else "🟡" if confidence > 0.6 else "🔴"
                             companies_list = group.get('companies', [])
-                            companies_display = ', '.join(companies_list[:5])
-                            if len(companies_list) > 5:
-                                companies_display += f" (and {len(companies_list)-5} more)"
+                            # Ensure all companies are strings
+                            companies_strings = [str(company) for company in companies_list if company]
+                            companies_display = ', '.join(companies_strings[:5])
+                            if len(companies_strings) > 5:
+                                companies_display += f" (and {len(companies_strings)-5} more)"
                             st.write(f"{confidence_color} {group['group']}: {companies_display} (confidence: {confidence:.2f})")
                     
                     if extraction.get('sectors'):
@@ -108,7 +117,8 @@ def main():
                         for sector in extraction['sectors']:
                             confidence = sector.get('confidence', 0)
                             confidence_color = "🟢" if confidence > 0.8 else "🟡" if confidence > 0.6 else "🔴"
-                            st.write(f"{confidence_color} {sector['sector']} (confidence: {confidence:.2f})")
+                            sector_name = str(sector.get('sector', 'Unknown'))
+                            st.write(f"{confidence_color} {sector_name} (confidence: {confidence:.2f})")
                     
                     if result.get('search_queries_used'):
                         st.write("**AI-Generated Search Queries:**")

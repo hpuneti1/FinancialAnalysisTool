@@ -10,6 +10,7 @@ from typing import Optional
 class FinancialDataCollector:
     def __init__(self):
         self.news_api_key = "d3e138fbb96d490ab6e203a441c32311"
+        self.last_request_time = 0 
         self.min_request_interval = 1
         
         self.premium_rss_feeds = [
