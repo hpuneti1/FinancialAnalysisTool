@@ -6,17 +6,17 @@ import numpy as np
 class VectorDatabase:
     def __init__(self, openai_key: str):
         self.openai_client = OpenAI(api_key=openai_key)
-        self.chroma_client = chromadb.Client()
+        self.chroma_client = chromadb.PersistentClient(path="./chroma_db")
         
         try:
-            self.chroma_client.delete_collection("financial_news")
+            self.collection = self.chroma_client.get_collection("financial_news")
+            st.info(f"Using existing collection with {self.collection.count()} articles")
         except:
-            pass
-        
-        self.collection = self.chroma_client.create_collection(
-            "financial_news",
-            metadata={"hnsw:space": "cosine"}
-        )
+            self.collection = self.chroma_client.create_collection(
+                "financial_news",
+                metadata={"hnsw:space": "cosine"}
+            )
+            st.info("Created new financial_news collection")
     
     def get_embeddings(self, texts: list[str]) -> list[list[float]]:
         try:
@@ -33,33 +33,56 @@ class VectorDatabase:
         if not articles:
             return
         
+        # Get existing article URLs to avoid duplicates
+        existing_urls = set()
+        try:
+            existing_data = self.collection.get()
+            for metadata in existing_data.get('metadatas', []):
+                if metadata and 'url' in metadata:
+                    existing_urls.add(metadata['url'])
+        except:
+            pass
+        
         documents = []
         metadatas = []
         ids = []
+        new_articles = []
         
-        for i, (article, tickers) in enumerate(zip(articles, mentioned_tickers)):
+        for article, tickers in zip(articles, mentioned_tickers):
+            url = article.get('url', '')
+            
+            # Skip if article already exists
+            if url and url in existing_urls:
+                continue
+                
             content = f"Title: {article.get('title', '')} Content: {article.get('content', '')}"
             
             metadata = {
                 'title': article.get('title', '')[:200],
                 'source': article.get('source', ''),
-                'url': article.get('url', ''),
+                'url': url,
                 'tickers': ', '.join(tickers) if tickers else '',
                 'publishedAt': article.get('publishedAt', '')
             }
             
             documents.append(content)
             metadatas.append(metadata)
-            ids.append(f"article_{i}")
+            ids.append(f"article_{hash(url) if url else hash(content)}")
+            new_articles.append(article)
         
-        embeddings = np.array(self.get_embeddings(documents), dtype=np.float32)
-        
-        self.collection.add(
-            documents=documents,
-            embeddings=embeddings,
-            metadatas=metadatas,
-            ids=ids
-        )
+        if documents:
+            embeddings = np.array(self.get_embeddings(documents), dtype=np.float32)
+            
+            self.collection.add(
+                documents=documents,
+                embeddings=embeddings,
+                metadatas=metadatas,
+                ids=ids
+            )
+            
+            st.success(f"Added {len(documents)} new articles to vector database")
+        else:
+            st.info("No new articles to add - all articles already exist in database")
     
     def search(self, query: str, n_results: int = 5) -> list[dict]:
         try:

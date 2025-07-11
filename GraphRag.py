@@ -21,27 +21,26 @@ class GraphRAGSystem:
         extraction_details = self.entity_extractor.get_extraction_details(user_query)
         
         # Enhanced: Handle sector queries with representative tickers
+        # Only add sector tickers for explicit sector queries (not when companies are mentioned)
         sector_tickers = []
-        if extraction_details.get('sector_queries'):
+        has_specific_companies = len(mentioned_tickers) > 0
+        has_explicit_sector_queries = any(
+            sq.get('query_type') == 'broad_sector' 
+            for sq in extraction_details.get('sector_queries', [])
+        )
+        
+        if extraction_details.get('sector_queries') and not has_specific_companies and has_explicit_sector_queries:
             for sector_query in extraction_details['sector_queries']:
-                if sector_query.get('confidence', 0) > 0.6:
+                if sector_query.get('confidence', 0) > 0.6 and sector_query.get('query_type') == 'broad_sector':
                     sector_name = sector_query['sector']
                     tickers = self.entity_extractor.get_sector_tickers(sector_name)
                     sector_tickers.extend(tickers)
-                    print(f"Added {len(tickers)} tickers for {sector_name} sector: {tickers}")
         
         # Combine all tickers
         all_tickers = list(set(mentioned_tickers + sector_tickers))
         
         stock_data = {}
         for ticker in all_tickers:  # Changed from mentioned_tickers to all_tickers
-            data = self.data_collector.get_stock_data(ticker)
-            if data:
-                stock_data[ticker] = data
-                self.knowledge_graph.add_company(data)
-        
-        stock_data = {}
-        for ticker in mentioned_tickers:
             data = self.data_collector.get_stock_data(ticker)
             if data:
                 stock_data[ticker] = data
@@ -88,7 +87,7 @@ class GraphRAGSystem:
             query_variants.add(user_query)
 
         all_articles = []
-        all_tickers = []
+        all_article_tickers = []
         
         for query in search_queries[:6]:  
             articles = self.data_collector.search_news(query, days_back=21, query_variants=list(query_variants), entity_extractor=self.entity_extractor)
@@ -97,11 +96,10 @@ class GraphRAGSystem:
                     f"{article.get('title', '')} {article.get('content', '')}"
                 )
                 all_articles.append(article)
-                all_tickers.append(article_tickers)
+                all_article_tickers.append(article_tickers)
 
                 self.knowledge_graph.add_news_article(article, article_tickers)
         
-        print(f"Fetched {len(all_articles)} articles from RSS feeds.")
 
         if self.entity_extractor is not None:
             relevant_articles = []
@@ -119,9 +117,6 @@ class GraphRAGSystem:
                 if found:
                     relevant_articles.append(article)
             articles = relevant_articles
-            # --- Debug: Print number of articles after entity extraction filtering ---
-            print(f"{len(articles)} articles after entity extraction filtering.")
-            # ------------------------------------------------------------------------
         else:
             articles = all_articles
 
@@ -131,34 +126,23 @@ class GraphRAGSystem:
             if article['url'] not in seen:
                 unique_articles.append(article)
                 seen.add(article['url'])
-        # --- Debug: Print number of unique articles after deduplication ---
-        print(f"{len(unique_articles)} unique articles after deduplication.")
-        # ------------------------------------------------------------------
 
-        # --- Deduplicate articles by URL before adding to vector DB ---
         unique_articles_db = []
         unique_tickers_db = []
         seen_urls_db = set()
-        for article, tickers in zip(all_articles, all_tickers):
+        for article, tickers in zip(all_articles, all_article_tickers):
             url = article.get('url')
             if url and url not in seen_urls_db:
                 unique_articles_db.append(article)
                 unique_tickers_db.append(tickers)
                 seen_urls_db.add(url)
-        # ------------------------------------------------------------
 
         if unique_articles_db:
             self.vector_db.add_articles(unique_articles_db, unique_tickers_db)
         
         relevant_articles = self.vector_db.search(user_query, n_results=8)
         
-        # --- Show all articles regardless of similarity score for debugging ---
-        print(f"{len(relevant_articles)} articles after vector DB search (no score filtering).")
-        for a in relevant_articles:
-            print(f"Title: {a['title'] if 'title' in a else a.get('metadata', {}).get('title', '')}, Score: {a.get('similarity_score', 0)}")
-        # ---------------------------------------------------------------------
 
-        # --- Stricter entity-based post-filtering: only include articles where the main company matches a query variant ---
         is_sector_query = bool(extraction_details.get('sector_queries'))
         
         if is_sector_query:
@@ -184,7 +168,6 @@ class GraphRAGSystem:
                     filtered_articles.append(article)
             
             relevant_articles = filtered_articles
-            print(f"{len(relevant_articles)} articles after sector-aware filtering.")
         else:
             filtered_articles = []
             for article in relevant_articles:
@@ -201,8 +184,6 @@ class GraphRAGSystem:
                     ):
                         filtered_articles.append(article)
             relevant_articles = filtered_articles
-            print(f"{len(relevant_articles)} articles after company-specific filtering.")
-        # -------------------------------------------------------------------------
 
         graph_context = ""
         for ticker in all_tickers:

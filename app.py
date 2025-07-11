@@ -1,5 +1,13 @@
 import streamlit as st
+import os
 from GraphRag import GraphRAGSystem
+
+# Load environment variables from .env file if it exists
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed, use system environment variables
 
 def main():
     st.set_page_config(
@@ -25,10 +33,24 @@ def main():
     st.title("Financial Analyzer")
     st.markdown("###Financial analysis using Knowledge Graphs and Retrieval Augmented Generation")
     
-    openai_key = "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"
+    # Get OpenAI API key from environment variables, Streamlit secrets, or fallback to hardcoded
+    openai_key = None
+    if "OPENAI_API_KEY" in os.environ:
+        openai_key = os.environ["OPENAI_API_KEY"]
+    else:
+        try:
+            if hasattr(st, 'secrets') and "OPENAI_API_KEY" in st.secrets:
+                openai_key = st.secrets["OPENAI_API_KEY"]
+        except Exception:
+            pass  # Ignore secrets parsing errors
+        
+        if not openai_key:
+            # Fallback to hardcoded key (your original key)
+            openai_key = "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"
     
-    if "your-ope" in openai_key:
-        st.error("❌ Still using template OpenAI key!")
+    if not openai_key or openai_key.startswith("sk-your") or openai_key.startswith("your-"):
+        st.error("❌ Please set your OpenAI API key in environment variables or Streamlit secrets!")
+        st.info("💡 Set OPENAI_API_KEY environment variable or add it to .streamlit/secrets.toml")
         st.stop()
     
     if 'rag_system' not in st.session_state:
@@ -52,91 +74,22 @@ def main():
             st.header("Analysis")
             st.write(result['response'])
             
-            tab1, tab2, tab3 = st.tabs(["Stock Data & Entities", "AI Extraction Details", "Sources & Context"])
+            tab1, tab2 = st.tabs(["Stock Data", "News Articles"])
             
             with tab1:
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.subheader("Stock Data")
-                    if result['stock_data']:
-                        for ticker, data in result['stock_data'].items():
-                            with st.container():
-                                st.metric(
-                                    label=f"{data['companyName']} ({ticker})",
-                                    value=f"${data['price']}",
-                                    delta=f"{data['changePercent']}"
-                                )
-                    else:
-                        st.info("No specific stock data found for this query")
-                
-                with col2:
-                    st.subheader("Detected Entities")
-
-                    if result['mentioned_tickers']:
-                        ticker_strings = [str(ticker) for ticker in result['mentioned_tickers'] if ticker]
-                        st.write("**Companies:**", ", ".join(ticker_strings))
-
-                    if result['mentioned_sectors']:
-                        sector_strings = [str(sector) for sector in result['mentioned_sectors'] if sector]
-                        st.write("**Sectors:**", ", ".join(sector_strings))
-
-                    if not result['mentioned_tickers'] and not result['mentioned_sectors']:
-                        st.info("No specific companies or sectors detected")
+                st.subheader("Stock Data")
+                if result['stock_data']:
+                    for ticker, data in result['stock_data'].items():
+                        with st.container():
+                            st.metric(
+                                label=f"{data['companyName']} ({ticker})",
+                                value=f"${data['price']}",
+                                delta=f"{data['changePercent']}"
+                            )
+                else:
+                    st.info("No specific stock data found for this query")
             
             with tab2:
-                st.subheader("LLM Entity Extraction Details")
-                
-                extraction = result.get('extraction_details', {})
-                
-                if extraction:
-                    if extraction.get('companies'):
-                        st.write("**Companies Identified:**")
-                        for company in extraction['companies']:
-                            confidence = company.get('confidence', 0)
-                            confidence_color = "🟢" if confidence > 0.8 else "🟡" if confidence > 0.6 else "🔴"
-                            company_name = str(company.get('name', 'Unknown'))
-                            company_ticker = str(company.get('ticker', 'Unknown'))
-                            st.write(f"{confidence_color} {company_name} → {company_ticker} (confidence: {confidence:.2f})")
-                    
-                    if extraction.get('stock_groups'):
-                        st.write("**Stock Groups Identified:**")
-                        for group in extraction['stock_groups']:
-                            confidence = group.get('confidence', 0)
-                            confidence_color = "🟢" if confidence > 0.8 else "🟡" if confidence > 0.6 else "🔴"
-                            companies_list = group.get('companies', [])
-                            # Ensure all companies are strings
-                            companies_strings = [str(company) for company in companies_list if company]
-                            companies_display = ', '.join(companies_strings[:5])
-                            if len(companies_strings) > 5:
-                                companies_display += f" (and {len(companies_strings)-5} more)"
-                            st.write(f"{confidence_color} {group['group']}: {companies_display} (confidence: {confidence:.2f})")
-                    
-                    if extraction.get('sectors'):
-                        st.write("**🏭 Sectors Identified:**")
-                        for sector in extraction['sectors']:
-                            confidence = sector.get('confidence', 0)
-                            confidence_color = "🟢" if confidence > 0.8 else "🟡" if confidence > 0.6 else "🔴"
-                            sector_name = str(sector.get('sector', 'Unknown'))
-                            st.write(f"{confidence_color} {sector_name} (confidence: {confidence:.2f})")
-                    
-                    if result.get('search_queries_used'):
-                        st.write("**AI-Generated Search Queries:**")
-                        for i, query in enumerate(result['search_queries_used'], 1):
-                            st.write(f"{i}. {query}")
-                    
-                    if result.get('cache_stats'):
-                        cache_stats = result['cache_stats']
-                        
-                        
-                else:
-                    st.info("Detailed extraction information not available. Your GraphRag module may need updating.")
-            
-            with tab3:
-                if result.get('graph_context'):
-                    st.subheader("Knowledge Graph Context")
-                    st.write(result['graph_context'])
-                
                 if result['relevant_articles']:
                     st.subheader("📰 Relevant News Articles")
                     for i, article in enumerate(result['relevant_articles'][:5], 1):
@@ -152,30 +105,7 @@ def main():
                                 st.write(f"**Companies Mentioned:** {tickers_in_metadata}")
                 else:
                     st.info("No relevant articles found")
-                    
-                if result.get('graph_context'):
-                    st.subheader("🔗 Knowledge Graph Relationships")
-                    st.text(result['graph_context'])
             
-            st.markdown("---")
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("Companies Found", len(result.get('mentioned_tickers', [])))
-            
-            with col2:
-                st.metric("Sectors Identified", len(result.get('mentioned_sectors', [])))
-            
-            with col3:
-                st.metric("Articles Analyzed", len(result.get('relevant_articles', [])))
-            
-            with col4:
-                avg_confidence = 0
-                extraction = result.get('extraction_details', {})
-                if extraction.get('companies'):
-                    confidences = [c.get('confidence', 0) for c in extraction['companies']]
-                    avg_confidence = sum(confidences) / len(confidences) if confidences else 0
-                st.metric("Avg Confidence", f"{avg_confidence:.2f}")
 
 if __name__ == "__main__":
     main()

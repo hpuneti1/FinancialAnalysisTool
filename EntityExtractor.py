@@ -69,6 +69,9 @@ class EntityExtractor:
         7. If text mentions stock groups, expand them to individual tickers
         8. For broad sector queries like "technology sector trends" or "banking stocks", add to sector_queries
         9. Return empty arrays if no entities found
+        10. Handle company names: "C3.ai" → company="C3.ai Inc", ticker="C3.AI"
+        11. AI companies should be mapped to Technology sector
+        12. Don't filter out valid ticker symbols and handle tickers with dots and numbers
         """
         
         user_prompt = f"Extract the financial entities contained in this text: {text}"
@@ -172,14 +175,80 @@ class EntityExtractor:
     def get_extraction_details(self, text: str) -> dict:
         return self.extract_entities(text)
     
+    def generate_search_terms(self, company_name: str, ticker: str, sector: str = "") -> list[str]:
+        """Generate comprehensive search terms for better news retrieval"""
+        # Handle None values and ensure strings
+        company_name = str(company_name) if company_name is not None else ""
+        ticker = str(ticker) if ticker is not None else ""
+        sector = str(sector) if sector is not None else ""
+        
+        prompt = f"""
+        Generate 5-7 diverse search terms for finding financial news about this company:
+        Company: {company_name}
+        Ticker: {ticker}
+        Sector: {sector}
+        
+        Include:
+        1. Company name variations (full name, short name, common abbreviations)
+        2. Stock-related terms combining ticker/company with financial keywords
+        3. Business description terms (what the company is known for)
+        4. Industry-specific terms
+        
+        Return only the search terms as a JSON array:
+        ["term1", "term2", "term3", ...]
+        
+        Example for Apple Inc (AAPL):
+        ["Apple Inc", "AAPL stock", "iPhone maker", "Apple earnings", "Tim Cook Apple", "Apple technology", "Apple revenue"]
+        """
+        
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a financial search expert. Generate precise search terms."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=200,
+                temperature=0.1
+            )
+            
+            content = response.choices[0].message.content
+            if not isinstance(content, str):
+                return [company_name, ticker] if company_name and ticker else ["stock news"]
+            
+            search_terms = json.loads(content)
+            if isinstance(search_terms, list):
+                # Filter out None values and empty strings
+                filtered_terms = [str(term).strip() for term in search_terms if term is not None and str(term).strip()]
+                return filtered_terms if filtered_terms else ([company_name, ticker] if company_name and ticker else ["stock news"])
+            else:
+                return [company_name, ticker] if company_name and ticker else ["stock news"]
+            
+        except Exception as e:
+            # Fallback to basic search terms
+            basic_terms = []
+            if company_name:
+                basic_terms.extend([company_name, f"{company_name} earnings"])
+            if ticker:
+                basic_terms.extend([ticker, f"{ticker} stock"])
+            if sector and company_name:
+                basic_terms.append(f"{sector} {company_name}")
+            return basic_terms if basic_terms else ["stock news"]
+    
     def _is_valid_ticker_format(self, ticker: str) -> bool:
-        if not ticker or len(ticker) < 1 or len(ticker) > 6:
+        if not ticker or len(ticker) < 1 or len(ticker) > 8:  # Extended length for tickers like "C3.AI"
             return False
         
-        if not re.match(r'^[A-Z]{1,5}(\.[A-Z])?$', ticker):
+        # Updated regex to handle tickers with dots and numbers like "C3.AI"
+        if not re.match(r'^[A-Z0-9]{1,6}(\.[A-Z0-9]{1,4})?$', ticker):
             return False
         
-        false_positives = {'AI', 'IT', 'US', 'EU', 'CEO', 'CFO', 'IPO', 'ETF', 'SEC', 'FDA'}
+        # Known valid tickers that might look like abbreviations
+        valid_tickers = {'AI', 'IT', 'ON', 'UP', 'TV', 'GM', 'GE', 'HP', 'AT', 'GO', 'C3.AI'}
+        if ticker in valid_tickers:
+            return True
+        
+        false_positives = {'US', 'EU', 'CEO', 'CFO', 'IPO', 'ETF', 'SEC', 'FDA', 'LLC', 'INC', 'LTD'}
         return ticker not in false_positives
     
     def validate_ticker(self, ticker: str) -> bool:

@@ -6,26 +6,69 @@ import time
 import re
 import feedparser
 import json
+import os
 from typing import Optional
+
+# Load environment variables from .env file if it exists
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 class FinancialDataCollector:
     def __init__(self):
-        self.news_api_key = "d3e138fbb96d490ab6e203a441c32311"
+        # Get NewsAPI key from environment variables, Streamlit secrets, or fallback to hardcoded
+        self.news_api_key = None
+        if "NEWS_API_KEY" in os.environ:
+            self.news_api_key = os.environ["NEWS_API_KEY"]
+        else:
+            try:
+                if hasattr(st, 'secrets') and "NEWS_API_KEY" in st.secrets:
+                    self.news_api_key = st.secrets["NEWS_API_KEY"]
+            except Exception:
+                pass  # Ignore secrets parsing errors
+            
+            if not self.news_api_key:
+                # Fallback to hardcoded key (your original key)
+                self.news_api_key = "d3e138fbb96d490ab6e203a441c32311"
         self.last_request_time = 0 
         self.min_request_interval = 1
         
         self.premium_rss_feeds = [
+            # Wall Street Journal & Dow Jones
             "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
             "https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml",
-            "http://feeds.reuters.com/reuters/businessNews",
-            "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-            "https://www.marketwatch.com/rss/topstories",
-            "https://finance.yahoo.com/news/rssindex",
+            "https://feeds.a.dj.com/rss/RSSWorldNews.xml",
             
-            "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
+            # Reuters
+            "http://feeds.reuters.com/reuters/businessNews",
+            "http://feeds.reuters.com/reuters/companyNews",
+            "http://feeds.reuters.com/reuters/technologyNews",
+            
+            # CNBC
+            "https://www.cnbc.com/id/100003114/device/rss/rss.html",
             "https://www.cnbc.com/id/100727362/device/rss/rss.html",
             "https://www.cnbc.com/id/10000664/device/rss/rss.html",
+            "https://www.cnbc.com/id/19854910/device/rss/rss.html",  # Earnings
             
+            # Yahoo Finance
+            "https://www.marketwatch.com/rss/topstories",
+            "https://finance.yahoo.com/news/rssindex",
             "https://feeds.finance.yahoo.com/rss/2.0/headline",
+            
+            # Additional Financial Sources
+            "https://www.investing.com/rss/news.rss",
+            "https://www.thestreet.com/feeds/stocks.xml",
+            "https://seekingalpha.com/feed.xml",
+            "https://www.fool.com/feeds/index.aspx",
+            "https://finance.yahoo.com/rss/headline?s=^GSPC",
+            
+            # Sector-specific feeds
+            "https://www.cnbc.com/id/19746125/device/rss/rss.html",  # Tech
+            "https://www.cnbc.com/id/10000108/device/rss/rss.html",  # Healthcare
+            
+            # SEC filings
             "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-k&output=atom",
         ]
          
@@ -83,18 +126,39 @@ class FinancialDataCollector:
             st.warning(f"Could not fetch data for {ticker}: {e}")
             return {}
     
-    def get_company_news_direct(self, ticker: str, company_name: str, days_back: int = 7) -> list[dict]:
-        """Get news directly about a specific company"""
+    def get_company_news_direct(self, ticker: str, company_name: str, days_back: int = 7, entity_extractor=None) -> list[dict]:
+        """Get news directly about a specific company with enhanced search terms"""
         articles = []
         
-        search_terms = [ticker]
-        if company_name:
-            search_terms.append(company_name)
-            if ' ' in company_name:
-                search_terms.append(company_name.split()[0])
+        # Generate dynamic search terms using LLM
+        if entity_extractor:
+            try:
+                search_terms = entity_extractor.generate_search_terms(company_name, ticker)
+                # Ensure search_terms is a list and filter out None values
+                if not isinstance(search_terms, list):
+                    search_terms = []
+                search_terms = [str(term).strip() for term in search_terms if term is not None and str(term).strip()]
+            except Exception as e:
+                print(f"Error generating search terms: {e}")
+                search_terms = []
+        else:
+            search_terms = []
+            
+        # Fallback to basic terms if LLM failed
+        if not search_terms:
+            if ticker:
+                search_terms.append(str(ticker))
+            if company_name:
+                search_terms.append(str(company_name))
+                if ' ' in str(company_name):
+                    search_terms.append(str(company_name).split()[0])
+        
+        # Final fallback
+        if not search_terms:
+            search_terms = ["stock news"]
         
         if self.news_api_key:
-            for term in search_terms[:2]:
+            for term in search_terms[:3]:  # Use top 3 search terms
                 try:
                     self.rate_limit()
                     
@@ -103,7 +167,7 @@ class FinancialDataCollector:
                         'q': f'"{term}" AND (stock OR shares OR earnings OR revenue)',
                         'language': 'en',
                         'sortBy': 'relevancy',
-                        'pageSize': 10,
+                        'pageSize': 8,
                         'apiKey': self.news_api_key,
                         'from': (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
                     }
@@ -114,16 +178,17 @@ class FinancialDataCollector:
                         for article in data.get('articles', []):
                             if self._is_quality_financial_article(article, ticker, company_name):
                                 articles.append({
-                                    'title': article.get('title', ''),
-                                    'description': article.get('description', ''),
-                                    'content': article.get('content', '') or article.get('description', ''),
-                                    'url': article.get('url', ''),
-                                    'publishedAt': article.get('publishedAt', ''),
-                                    'source': article.get('source', {}).get('name', 'News API'),
+                                    'title': str(article.get('title', '') or ''),
+                                    'description': str(article.get('description', '') or ''),
+                                    'content': str(article.get('content', '') or article.get('description', '') or ''),
+                                    'url': str(article.get('url', '') or ''),
+                                    'publishedAt': str(article.get('publishedAt', '') or ''),
+                                    'source': str(article.get('source', {}).get('name', 'News API') or 'News API'),
                                     'relevance_score': self._calculate_relevance_score(article, ticker, company_name)
                                 })
                 except Exception as e:
-                    st.warning(f"News API error for {term}: {e}")
+                    print(f"News API error for {term}: {e}")
+                    continue
         
         return articles
     
@@ -145,8 +210,8 @@ class FinancialDataCollector:
             try:
                 feed = feedparser.parse(feed_url)
                 for entry in feed.entries[:10]:
-                    title = getattr(entry, 'title', '')
-                    summary = getattr(entry, 'summary', '')
+                    title = str(getattr(entry, 'title', '') or '')
+                    summary = str(getattr(entry, 'summary', '') or '')
                     content = f"{title} {summary}"
                     
                     if any(keyword.lower() in content.lower() for keyword in keywords):
@@ -154,9 +219,9 @@ class FinancialDataCollector:
                             'title': title,
                             'description': summary,
                             'content': summary,
-                            'url': getattr(entry, 'link', ''),
-                            'publishedAt': getattr(entry, 'published', ''),
-                            'source': getattr(feed.feed, 'title', 'RSS Feed'),
+                            'url': str(getattr(entry, 'link', '') or ''),
+                            'publishedAt': str(getattr(entry, 'published', '') or ''),
+                            'source': str(getattr(feed.feed, 'title', 'RSS Feed') or 'RSS Feed'),
                             'relevance_score': self._calculate_sector_relevance(content, keywords)
                         })
             except Exception as e:
@@ -177,9 +242,24 @@ class FinancialDataCollector:
                     company_articles = self.get_company_news_direct(
                         company['ticker'], 
                         company['name'], 
-                        days_back
+                        days_back,
+                        entity_extractor=entity_extractor
                     )
                     all_articles.extend(company_articles)
+                    
+                    # If few company-specific articles found, add sector news as fallback
+                    if len(company_articles) < 3:
+                        # Try to get sector from stock data or use broad terms
+                        company_sector = "Technology"  # Default fallback
+                        try:
+                            import yfinance as yf
+                            stock = yf.Ticker(company.get('ticker', ''))
+                            company_sector = stock.info.get('sector', 'Technology')
+                        except:
+                            pass
+                        
+                        sector_fallback = self.get_sector_news(company_sector, days_back)
+                        all_articles.extend(sector_fallback)
             
             for sector in entities.get('sectors', []):
                 if sector.get('confidence', 0) > 0.7:
@@ -194,18 +274,18 @@ class FinancialDataCollector:
     
     def _is_quality_financial_article(self, article: dict, ticker: str, company_name: str) -> bool:
         """Filter for high-quality financial articles"""
-        title = article.get('title', '').lower()
-        description = article.get('description', '').lower()
+        title = str(article.get('title', '') or '').lower()
+        description = str(article.get('description', '') or '').lower()
         content = f"{title} {description}"
         
         company_mentioned = (
-            ticker.lower() in content or 
-            (company_name and company_name.lower() in content)
+            str(ticker).lower() in content or 
+            (company_name and str(company_name).lower() in content)
         )
         
         has_financial_keywords = any(keyword in content for keyword in self.quality_keywords)
         
-        source = article.get('source', {}).get('name', '').lower()
+        source = str(article.get('source', {}).get('name', '') or '').lower()
         excluded_sources = ['blog', 'reddit', 'yahoo answers', 'wikipedia']
         is_quality_source = not any(excluded in source for excluded in excluded_sources)
         
@@ -213,26 +293,26 @@ class FinancialDataCollector:
     
     def _calculate_relevance_score(self, article: dict, ticker: str, company_name: str) -> float:
         """Calculate relevance score for articles"""
-        title = article.get('title', '').lower()
-        description = article.get('description', '').lower()
+        title = str(article.get('title', '') or '').lower()
+        description = str(article.get('description', '') or '').lower()
         content = f"{title} {description}"
         
         score = 0.0
         
-        if ticker.lower() in title:
+        if str(ticker).lower() in title:
             score += 0.4
-        elif ticker.lower() in content:
+        elif str(ticker).lower() in content:
             score += 0.2
         
-        if company_name and company_name.lower() in title:
+        if company_name and str(company_name).lower() in title:
             score += 0.3
-        elif company_name and company_name.lower() in content:
+        elif company_name and str(company_name).lower() in content:
             score += 0.1
         
         financial_keywords_count = sum(1 for keyword in self.quality_keywords if keyword in content)
         score += min(financial_keywords_count * 0.05, 0.3)
         
-        source = article.get('source', {}).get('name', '').lower()
+        source = str(article.get('source', {}).get('name', '') or '').lower()
         if any(premium in source for premium in ['reuters', 'bloomberg', 'wsj', 'cnbc']):
             score += 0.2
         
@@ -255,8 +335,8 @@ class FinancialDataCollector:
             try:
                 feed = feedparser.parse(feed_url)
                 for entry in feed.entries[:15]:
-                    title = getattr(entry, 'title', '')
-                    summary = getattr(entry, 'summary', '')
+                    title = str(getattr(entry, 'title', '') or '')
+                    summary = str(getattr(entry, 'summary', '') or '')
                     content = f"{title} {summary}".lower()
                     
                     if any(word in content for word in query_lower.split()):
@@ -264,9 +344,9 @@ class FinancialDataCollector:
                             'title': title,
                             'description': summary,
                             'content': summary,
-                            'url': getattr(entry, 'link', ''),
-                            'publishedAt': getattr(entry, 'published', ''),
-                            'source': getattr(feed.feed, 'title', 'RSS Feed'),
+                            'url': str(getattr(entry, 'link', '') or ''),
+                            'publishedAt': str(getattr(entry, 'published', '') or ''),
+                            'source': str(getattr(feed.feed, 'title', 'RSS Feed') or 'RSS Feed'),
                             'relevance_score': 0.5
                         })
             except:
@@ -281,8 +361,8 @@ class FinancialDataCollector:
         unique_articles = []
         
         for article in articles:
-            url = article.get('url', '')
-            title = article.get('title', '').lower()
+            url = str(article.get('url', '') or '')
+            title = str(article.get('title', '') or '').lower()
             
             if url and url in seen_urls:
                 continue
