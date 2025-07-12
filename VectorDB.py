@@ -1,22 +1,30 @@
 import streamlit as st
-import chromadb
-from openai import OpenAI
 import numpy as np
+from openai import OpenAI
 
 class VectorDatabase:
     def __init__(self, openai_key: str):
         self.openai_client = OpenAI(api_key=openai_key)
-        self.chroma_client = chromadb.PersistentClient(path="./chroma_db")
+        self.chroma_client = None
+        self.collection = None
         
         try:
-            self.collection = self.chroma_client.get_collection("financial_news")
-            st.info(f"Using existing collection with {self.collection.count()} articles")
-        except:
-            self.collection = self.chroma_client.create_collection(
-                "financial_news",
-                metadata={"hnsw:space": "cosine"}
-            )
-            st.info("Created new financial_news collection")
+            import chromadb
+            self.chroma_client = chromadb.PersistentClient(path="./chroma_db")
+            
+            try:
+                self.collection = self.chroma_client.get_collection("financial_news")
+                st.info(f"Using existing collection with {self.collection.count()} articles")
+            except:
+                self.collection = self.chroma_client.create_collection(
+                    "financial_news",
+                    metadata={"hnsw:space": "cosine"}
+                )
+                st.info("Created new financial_news collection")
+        except ImportError:
+            st.warning("⚠️ ChromaDB not available - vector search disabled. App will use news search only.")
+        except Exception as e:
+            st.warning(f"ChromaDB initialization failed: {e}. Using fallback news search.")
     
     def get_embeddings(self, texts: list[str]) -> list[list[float]]:
         try:
@@ -30,7 +38,7 @@ class VectorDatabase:
             return [[0.0] * 1536] * len(texts)
     
     def add_articles(self, articles: list[dict], mentioned_tickers: list[list[str]]):
-        if not articles:
+        if not articles or not self.collection:
             return
         
         existing_urls = set()
@@ -83,6 +91,9 @@ class VectorDatabase:
             st.info("No new articles to add - all articles already exist in database")
     
     def search(self, query: str, n_results: int = 5) -> list[dict]:
+        if not self.collection:
+            return []
+            
         try:
             query_embedding = self.get_embeddings([query])[0]
             
