@@ -61,7 +61,7 @@ Adding NLP-based sentiment scoring to news articles for more complex market anal
 
 ## Try the Live Application
 
-**Access the deployed application here:** [https://your-app-url.streamlit.app/](https://your-app-url.streamlit.app/)
+**Access the deployed application here:** [https://financialanalysistool.streamlit.app/](https://financialanalysistool.streamlit.app/)
 
 ## Learning Outcomes
 
