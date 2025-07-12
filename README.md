@@ -73,3 +73,8 @@ Through this project, I've gained practical experience in:
 - Building modular, scalable architectures for AI applications
 
 This project represents not just a functional financial analysis tool, but an exploration of how AI can be used to gather and analyze data not only in the financial field, but all types of fields.
+
+ ## Knowledge Graph Visualization
+
+  ![Knowledge Graph](currentGraph.png)
+  *Knowledge Graph at time of deployment (it will continue to grow with queries)*
