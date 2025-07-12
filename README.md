@@ -77,4 +77,5 @@ This project represents not just a functional financial analysis tool, but an ex
  ## Knowledge Graph Visualization
 
   ![Knowledge Graph](currentGraph.png)
+  
   *Knowledge Graph at time of deployment (it will continue to grow with queries)*
