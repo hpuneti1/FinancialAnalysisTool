@@ -4,6 +4,7 @@ from EntityExtractor import EntityExtractor
 from KG import FinancialKnowledgeGraph
 from VectorDB import VectorDatabase
 
+#This class is resposible for understanding the query, gathering information, and synthesizing an analysis
 class GraphRAGSystem:
     def __init__(self, openai_key: str):
         self.data_collector = FinancialDataCollector()
@@ -20,8 +21,6 @@ class GraphRAGSystem:
         
         extraction_details = self.entity_extractor.get_extraction_details(user_query)
         
-        # Enhanced: Handle sector queries with representative tickers
-        # Only add sector tickers for explicit sector queries (not when companies are mentioned)
         sector_tickers = []
         has_specific_companies = len(mentioned_tickers) > 0
         has_explicit_sector_queries = any(
@@ -29,18 +28,17 @@ class GraphRAGSystem:
             for sq in extraction_details.get('sector_queries', [])
         )
         
-        if extraction_details.get('sector_queries') and not has_specific_companies and has_explicit_sector_queries:
+        if extraction_details.get('sector_queries') and has_explicit_sector_queries:
             for sector_query in extraction_details['sector_queries']:
-                if sector_query.get('confidence', 0) > 0.6 and sector_query.get('query_type') == 'broad_sector':
+                if sector_query.get('confidence', 0) > 0.5 and sector_query.get('query_type') == 'broad_sector':
                     sector_name = sector_query['sector']
                     tickers = self.entity_extractor.get_sector_tickers(sector_name)
                     sector_tickers.extend(tickers)
         
-        # Combine all tickers
         all_tickers = list(set(mentioned_tickers + sector_tickers))
         
         stock_data = {}
-        for ticker in all_tickers:  # Changed from mentioned_tickers to all_tickers
+        for ticker in all_tickers:
             data = self.data_collector.get_stock_data(ticker)
             if data:
                 stock_data[ticker] = data
@@ -49,7 +47,7 @@ class GraphRAGSystem:
         search_queries = []
         
         for sector_query in extraction_details.get('sector_queries', []):
-            if sector_query.get('confidence', 0) > 0.6:
+            if sector_query.get('confidence', 0) > 0.5:
                 sector_name = sector_query['sector']
                 search_queries.append(f"{sector_name} sector performance trends analysis")
                 search_queries.append(f"{sector_name} stocks outlook earnings")
@@ -76,11 +74,10 @@ class GraphRAGSystem:
             query_variants.add(company)
             if " " in company:
                 query_variants.add(company.split()[0])
-        for ticker in all_tickers:  # Changed from mentioned_tickers to all_tickers
+        for ticker in all_tickers:
             query_variants.add(ticker)
         for sector in mentioned_sectors:
             query_variants.add(sector)
-        # Add sector query terms
         for sector_query in extraction_details.get('sector_queries', []):
             query_variants.add(sector_query['sector'])
         if not query_variants:
@@ -105,7 +102,6 @@ class GraphRAGSystem:
             relevant_articles = []
             for article in all_articles:
                 entities = self.entity_extractor.extract_entities(article['title'] + ' ' + article['content'])
-                # Check if any query_variant matches a company name, ticker, or sector
                 found = False
                 for variant in query_variants:
                     if variant in [c['name'] for c in entities.get('companies', [])]:
@@ -140,31 +136,67 @@ class GraphRAGSystem:
         if unique_articles_db:
             self.vector_db.add_articles(unique_articles_db, unique_tickers_db)
         
-        relevant_articles = self.vector_db.search(user_query, n_results=8)
-        
-
         is_sector_query = bool(extraction_details.get('sector_queries'))
+        
+        if is_sector_query and extraction_details.get('sector_queries'):
+            sector_query = extraction_details['sector_queries'][0]
+            sector_name = sector_query.get('sector', '')
+            
+            sector_search_queries = {
+                'Banking': "banking sector stocks performance JPMorgan Wells Fargo Goldman Sachs Bank of America Citigroup earnings financial results",
+                'Healthcare': "healthcare sector stocks performance Johnson Johnson Pfizer UnitedHealth Abbott Thermo Fisher medical pharmaceutical biotech earnings",
+                'Technology': "technology sector stocks performance Apple Microsoft Google Amazon Meta Tesla Nvidia tech earnings software hardware",
+                'Energy': "energy sector stocks performance ExxonMobil Chevron ConocoPhillips oil gas renewable earnings",
+                'Financial': "financial sector stocks performance banks insurance investment earnings financial services"
+            }
+            
+            if sector_name in sector_search_queries:
+                relevant_articles = self.vector_db.search(sector_search_queries[sector_name], n_results=15)
+            else:
+                relevant_articles = self.vector_db.search(user_query, n_results=15)
+        else:
+            relevant_articles = self.vector_db.search(user_query, n_results=15)
         
         if is_sector_query:
             filtered_articles = []
+            sector_keywords = {
+                'Banking': ['bank', 'banking', 'JPM', 'BAC', 'WFC', 'Citigroup', 'Goldman Sachs', 'Wells Fargo', 'JPMorgan'],
+                'Technology': ['tech', 'technology', 'AAPL', 'MSFT', 'GOOGL', 'Apple', 'Microsoft', 'Google', 'software', 'hardware'],
+                'Healthcare': ['healthcare', 'health', 'medical', 'pharmaceutical', 'pharma', 'biotech', 'drug', 'medicine', 'clinical', 'JNJ', 'PFE', 'UNH', 'ABT', 'TMO', 'johnson', 'pfizer', 'abbott', 'unitedhealth', 'thermo fisher'],
+                'Energy': ['energy', 'oil', 'gas', 'renewable', 'petroleum', 'drilling'],
+                'Financial': ['financial', 'finance', 'bank', 'investment', 'insurance']
+            }
+            
+            search_keywords = []
+            for sector_query in extraction_details.get('sector_queries', []):
+                sector_name = sector_query.get('sector', '')
+                if sector_name in sector_keywords:
+                    search_keywords.extend(sector_keywords[sector_name])
+            
+            search_keywords.extend(all_tickers)
+            
             for article in relevant_articles:
                 content = article.get('content', '')
-                if not content and 'metadata' in article:
-                    content = article['metadata'].get('title', '')
-                entities = self.entity_extractor.extract_entities(content)
+                title = article.get('metadata', {}).get('title', '') if 'metadata' in article else ''
+                full_text = f"{title} {content}".lower()
                 
-                article_tickers = entities.get('tickers_mentioned', [])
-                if any(ticker in all_tickers for ticker in article_tickers):
-                    filtered_articles.append(article)
-                    continue
+                article_is_relevant = False
                 
-                companies = entities.get('companies', [])
-                if any(company.get('ticker') in all_tickers for company in companies):
-                    filtered_articles.append(article)
-                    continue
+                for sector_query in extraction_details.get('sector_queries', []):
+                    sector_name = sector_query.get('sector', '')
+                    if sector_name in sector_keywords:
+                        sector_terms = sector_keywords[sector_name]
+                        
+                        term_matches = sum(1 for term in sector_terms if term.lower() in full_text)
+                        
+                        if term_matches >= 2:  # At least 2 sector-specific terms
+                            article_is_relevant = True
+                            break
+                        elif any(term in full_text for term in sector_terms[:3]):
+                            article_is_relevant = True
+                            break
                 
-                sectors = [s['sector'] for s in entities.get('sectors', [])]
-                if any(sector in mentioned_sectors for sector in sectors):
+                if article_is_relevant:
                     filtered_articles.append(article)
             
             relevant_articles = filtered_articles
@@ -172,18 +204,16 @@ class GraphRAGSystem:
             filtered_articles = []
             for article in relevant_articles:
                 content = article.get('content', '')
-                if not content and 'metadata' in article:
-                    content = article['metadata'].get('title', '')
-                entities = self.entity_extractor.extract_entities(content)
-                companies = entities.get('companies', [])
-                if companies:
-                    main_company = companies[0]
-                    if (
-                        main_company.get('name') in query_variants or
-                        main_company.get('ticker') in query_variants
-                    ):
-                        filtered_articles.append(article)
+                title = article.get('metadata', {}).get('title', '') if 'metadata' in article else ''
+                full_text = f"{title} {content}".lower()
+                
+                if any(variant.lower() in full_text for variant in query_variants if variant):
+                    filtered_articles.append(article)
+            
             relevant_articles = filtered_articles
+        
+        if not relevant_articles:
+            relevant_articles = self.vector_db.search(user_query, n_results=5)
 
         graph_context = ""
         for ticker in all_tickers:
@@ -210,9 +240,9 @@ class GraphRAGSystem:
             'search_queries_used': search_queries[:6],
             'cache_stats': self.entity_extractor.get_cache_stats()
         }
-    
+    #Generate Analysis
     def generate_response(self, query: str, articles: list[dict], stock_data: dict, graph_context: str, extraction_details: dict) -> str:
-        relevant_articles = [article for article in articles if article['similarity_score'] > 0.3][:3]
+        relevant_articles = [article for article in articles if article.get('similarity_score', 0) > 0.1][:5]
         
         article_context = "\n\n".join([
             f"Article: {article['metadata']['title']}\n"
@@ -222,8 +252,7 @@ class GraphRAGSystem:
         ])
         
         stock_context = "\n".join([
-            f"{ticker}: {data['companyName']} - ${data['price']} ({data['changePercent']}) "
-            f"Sector: {data['sector']}, Market Cap: ${data.get('marketCap', 'N/A'):,}"
+            f"{data['companyName']} ({ticker}) is currently priced at ${data['price']}"
             for ticker, data in stock_data.items()
         ])
         
@@ -243,21 +272,30 @@ class GraphRAGSystem:
                                   for sq in extraction_details['sector_queries']]
             extraction_context += f"Sector queries: {', '.join(sector_queries_found)}. "
         
-        # Detect if this is a sector-wide analysis
         is_sector_analysis = bool(extraction_details.get('sector_queries')) or len(stock_data) > 3
 
         
         system_prompt = f"""
             You are a senior financial analyst providing detailed investment analysis. 
 
-            IMPORTANT FORMATTING RULES:
-            - Use simple, clean text without special formatting
-            - Write numbers clearly: $315.00 and 4.75% (no bold, no asterisks)
-            - Use bullet points with simple dashes (-)
-            - Keep formatting minimal and readable
-            - Do not use markdown formatting like **bold** or *italics*
-            - Do not add extra spaces between letters or words
-            - Write prices and percentages as continuous text: "$503.32 with an increase of 0.37%"
+            CRITICAL FORMATTING RULES - FOLLOW EXACTLY:
+            
+            CORRECT FORMAT EXAMPLES:
+            - "Abbott Laboratories (ABT) is trading at $132.02, down 1.18%, with a market cap of $229.69 billion."
+            - "Johnson & Johnson (JNJ) is priced at $156.90, down 0.50%, with a market capitalization of $377.51 billion."
+            
+            WRONG FORMATS TO AVOID:
+            - DO NOT WRITE: "$132.02withadecreaseof1.18" 
+            - DO NOT WRITE: "$132.02 w i t h a d e c r e a s e o f 1.18"
+            - DO NOT WRITE: "132.02withadecreaseof1.18229.69"
+            
+            RULES:
+            - Always put spaces between words
+            - Always use complete sentences with proper grammar
+            - Write "trading at $X.XX, up/down X.XX%" not concatenated numbers
+            - Write "with a market cap of $X.XX billion" with spaces
+            - Use normal sentence structure, not fragmented text
+            - Never join numbers and words without spaces
             
             {"SECTOR ANALYSIS MODE: You are analyzing a broad sector or group of stocks. Provide sector-wide trends, compare performance across companies, and give sector outlook." if is_sector_analysis else "COMPANY ANALYSIS MODE: Focus on specific companies mentioned in the query."}
             
@@ -289,12 +327,14 @@ class GraphRAGSystem:
 
             Please provide a comprehensive financial analysis that:
             1. Directly answers the user's question
-            2. Analyzes the current stock performance with specific data points
-            3. Discusses relevant market trends and news
-            4. Provides outlook based on available information
-            5. Highlights key factors investors should monitor
-
-            Use specific numbers, percentages, and facts from the provided data.
+            2. References SPECIFIC articles from the news section with details and insights
+            3. Incorporates the stock price naturally (e.g., "Apple is trading at $211.16")
+            4. Cites analyst opinions, ratings, and forecasts from the articles
+            5. Discusses company-specific developments mentioned in the news
+            6. Provides outlook based on the article content and trends
+            7. Uses direct quotes or paraphrases from the news articles
+            
+            IMPORTANT: Your analysis should heavily reference the provided news articles. Cite specific analyst names, firms, price targets, and developments mentioned in the articles.
             """
         
         try:
@@ -305,9 +345,41 @@ class GraphRAGSystem:
                     {"role": "user", "content": user_prompt}
                 ],
                 max_tokens=1200,
-                temperature=0.2
+                temperature=0.1
             )
             
-            return response.choices[0].message.content or ""
+            response_text = response.choices[0].message.content or ""
+            
+            import re
+            
+            response_text = re.sub(r'(\$\d+\.\d+)([a-z])', r'\1 \2', response_text)
+            response_text = re.sub(r'(\d+\.\d+%)([a-z])', r'\1 \2', response_text)
+            response_text = re.sub(r'(\d+)([a-z])', r'\1 \2', response_text)
+            
+            response_text = re.sub(r'withadecreaseof', 'with a decrease of ', response_text)
+            response_text = re.sub(r'withanincreaseof', 'with an increase of ', response_text)
+            response_text = re.sub(r'withadecrease', 'with a decrease', response_text)
+            response_text = re.sub(r'withanincrease', 'with an increase', response_text)
+            
+            response_text = re.sub(r'(\d+\.\d+)\s*,\s*([a-z])\s+([a-z])\s+([a-z])\s+([a-z])\s*(\d+\.\d+)', r'\1, \2\3\4\5 \6', response_text)
+            
+            response_text = re.sub(r'(\d)\s+(\d)\s+(\d)\s*\.\s*(\d)\s+(\d)', r'\1\2\3.\4\5', response_text)
+            response_text = re.sub(r'(\d)\s+(\d)\s*\.\s*(\d)\s+(\d)', r'\1\2.\3\4', response_text)
+            response_text = re.sub(r'(\d)\s*\.\s*(\d)\s+(\d)', r'\1.\2\3', response_text)
+            
+            response_text = re.sub(r'([a-z])\s*\n\s*([a-z])\s*\n\s*([a-z])\s*\n\s*([a-z])', r'\1\2\3\4', response_text)
+            response_text = re.sub(r'([a-z])\s*\n\s*([a-z])\s*\n\s*([a-z])', r'\1\2\3', response_text)
+            response_text = re.sub(r'([a-z])\s*\n\s*([a-z])', r'\1\2', response_text)
+            
+            response_text = re.sub(r'\b([a-z])\s+([a-z])\s+([a-z])\s+([a-z])\s+([a-z])\s+([a-z])\s+([a-z])\s+([a-z])\b', r'\1\2\3\4\5\6\7\8', response_text)
+            response_text = re.sub(r'\b([a-z])\s+([a-z])\s+([a-z])\s+([a-z])\s+([a-z])\s+([a-z])\s+([a-z])\b', r'\1\2\3\4\5\6\7', response_text)
+            response_text = re.sub(r'\b([a-z])\s+([a-z])\s+([a-z])\s+([a-z])\s+([a-z])\s+([a-z])\b', r'\1\2\3\4\5\6', response_text)
+            response_text = re.sub(r'\b([a-z])\s+([a-z])\s+([a-z])\s+([a-z])\s+([a-z])\b', r'\1\2\3\4\5', response_text)
+            response_text = re.sub(r'\b([a-z])\s+([a-z])\s+([a-z])\s+([a-z])\b', r'\1\2\3\4', response_text)
+            response_text = re.sub(r'\b([a-z])\s+([a-z])\s+([a-z])\b', r'\1\2\3', response_text)
+            
+            response_text = re.sub(r'(\d+\.\d+)([a-z]+)(\d+\.\d+)', r'\1, \2 \3', response_text)
+            
+            return response_text
         except Exception as e:
             return f"Error generating response: {e}"

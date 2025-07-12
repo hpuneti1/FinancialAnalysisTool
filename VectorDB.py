@@ -33,7 +33,6 @@ class VectorDatabase:
         if not articles:
             return
         
-        # Get existing article URLs to avoid duplicates
         existing_urls = set()
         try:
             existing_data = self.collection.get()
@@ -51,7 +50,6 @@ class VectorDatabase:
         for article, tickers in zip(articles, mentioned_tickers):
             url = article.get('url', '')
             
-            # Skip if article already exists
             if url and url in existing_urls:
                 continue
                 

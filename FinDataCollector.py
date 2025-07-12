@@ -9,16 +9,14 @@ import json
 import os
 from typing import Optional
 
-# Load environment variables from .env file if it exists
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
-
+#This class gathers financial data using a NEWS api key and also rss feeds.
 class FinancialDataCollector:
     def __init__(self):
-        # Get NewsAPI key from environment variables, Streamlit secrets, or fallback to hardcoded
         self.news_api_key = None
         if "NEWS_API_KEY" in os.environ:
             self.news_api_key = os.environ["NEWS_API_KEY"]
@@ -27,10 +25,9 @@ class FinancialDataCollector:
                 if hasattr(st, 'secrets') and "NEWS_API_KEY" in st.secrets:
                     self.news_api_key = st.secrets["NEWS_API_KEY"]
             except Exception:
-                pass  # Ignore secrets parsing errors
+                pass
             
             if not self.news_api_key:
-                # Fallback to hardcoded key (your original key)
                 self.news_api_key = "d3e138fbb96d490ab6e203a441c32311"
         self.last_request_time = 0 
         self.min_request_interval = 1
@@ -50,7 +47,7 @@ class FinancialDataCollector:
             "https://www.cnbc.com/id/100003114/device/rss/rss.html",
             "https://www.cnbc.com/id/100727362/device/rss/rss.html",
             "https://www.cnbc.com/id/10000664/device/rss/rss.html",
-            "https://www.cnbc.com/id/19854910/device/rss/rss.html",  # Earnings
+            "https://www.cnbc.com/id/19854910/device/rss/rss.html",
             
             # Yahoo Finance
             "https://www.marketwatch.com/rss/topstories",
@@ -65,8 +62,8 @@ class FinancialDataCollector:
             "https://finance.yahoo.com/rss/headline?s=^GSPC",
             
             # Sector-specific feeds
-            "https://www.cnbc.com/id/19746125/device/rss/rss.html",  # Tech
-            "https://www.cnbc.com/id/10000108/device/rss/rss.html",  # Healthcare
+            "https://www.cnbc.com/id/19746125/device/rss/rss.html",
+            "https://www.cnbc.com/id/10000108/device/rss/rss.html", 
             
             # SEC filings
             "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-k&output=atom",
@@ -85,9 +82,8 @@ class FinancialDataCollector:
         if time_since_last < self.min_request_interval:
             time.sleep(self.min_request_interval - time_since_last)
         self.last_request_time = time.time()
-    
+    #Retrieves stock data from yahoo
     def get_stock_data(self, ticker: str) -> dict:
-        """Enhanced stock data with more metrics"""
         try:
             stock = yf.Ticker(ticker)
             hist = stock.history(period="5d")
@@ -127,14 +123,11 @@ class FinancialDataCollector:
             return {}
     
     def get_company_news_direct(self, ticker: str, company_name: str, days_back: int = 7, entity_extractor=None) -> list[dict]:
-        """Get news directly about a specific company with enhanced search terms"""
         articles = []
         
-        # Generate dynamic search terms using LLM
         if entity_extractor:
             try:
                 search_terms = entity_extractor.generate_search_terms(company_name, ticker)
-                # Ensure search_terms is a list and filter out None values
                 if not isinstance(search_terms, list):
                     search_terms = []
                 search_terms = [str(term).strip() for term in search_terms if term is not None and str(term).strip()]
@@ -144,7 +137,6 @@ class FinancialDataCollector:
         else:
             search_terms = []
             
-        # Fallback to basic terms if LLM failed
         if not search_terms:
             if ticker:
                 search_terms.append(str(ticker))
@@ -153,12 +145,11 @@ class FinancialDataCollector:
                 if ' ' in str(company_name):
                     search_terms.append(str(company_name).split()[0])
         
-        # Final fallback
         if not search_terms:
             search_terms = ["stock news"]
         
         if self.news_api_key:
-            for term in search_terms[:3]:  # Use top 3 search terms
+            for term in search_terms[:3]:
                 try:
                     self.rate_limit()
                     
@@ -193,7 +184,6 @@ class FinancialDataCollector:
         return articles
     
     def get_sector_news(self, sector: str, days_back: int = 7) -> list[dict]:
-        """Get sector-specific news"""
         articles = []
         
         sector_keywords = {
@@ -229,9 +219,8 @@ class FinancialDataCollector:
         
         articles.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
         return articles[:15]
-    
+    #Finding relevant articles
     def search_news(self, query: str, days_back: int = 7, query_variants: Optional[list] = None, entity_extractor=None) -> list[dict]:
-        """Enhanced news search with better targeting"""
         all_articles = []
         
         if entity_extractor:
@@ -247,10 +236,8 @@ class FinancialDataCollector:
                     )
                     all_articles.extend(company_articles)
                     
-                    # If few company-specific articles found, add sector news as fallback
                     if len(company_articles) < 3:
-                        # Try to get sector from stock data or use broad terms
-                        company_sector = "Technology"  # Default fallback
+                        company_sector = "Technology"
                         try:
                             import yfinance as yf
                             stock = yf.Ticker(company.get('ticker', ''))
@@ -273,7 +260,6 @@ class FinancialDataCollector:
         return sorted(unique_articles, key=lambda x: x.get('relevance_score', 0), reverse=True)[:20]
     
     def _is_quality_financial_article(self, article: dict, ticker: str, company_name: str) -> bool:
-        """Filter for high-quality financial articles"""
         title = str(article.get('title', '') or '').lower()
         description = str(article.get('description', '') or '').lower()
         content = f"{title} {description}"
@@ -292,7 +278,6 @@ class FinancialDataCollector:
         return company_mentioned and has_financial_keywords and is_quality_source
     
     def _calculate_relevance_score(self, article: dict, ticker: str, company_name: str) -> float:
-        """Calculate relevance score for articles"""
         title = str(article.get('title', '') or '').lower()
         description = str(article.get('description', '') or '').lower()
         content = f"{title} {description}"
@@ -319,7 +304,6 @@ class FinancialDataCollector:
         return min(score, 1.0)
     
     def _calculate_sector_relevance(self, content: str, keywords: list[str]) -> float:
-        """Calculate sector relevance score"""
         content_lower = content.lower()
         keyword_matches = sum(1 for keyword in keywords if keyword.lower() in content_lower)
         financial_matches = sum(1 for keyword in self.quality_keywords if keyword in content_lower)
@@ -327,7 +311,6 @@ class FinancialDataCollector:
         return min((keyword_matches * 0.3 + financial_matches * 0.1), 1.0)
     
     def _search_rss_feeds(self, query: str, days_back: int) -> list[dict]:
-        """Search RSS feeds for query"""
         articles = []
         query_lower = query.lower()
         
@@ -355,7 +338,6 @@ class FinancialDataCollector:
         return articles
     
     def _deduplicate_articles(self, articles: list[dict]) -> list[dict]:
-        """Remove duplicate articles by URL and title similarity"""
         seen_urls = set()
         seen_titles = set()
         unique_articles = []

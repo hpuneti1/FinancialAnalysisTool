@@ -1,21 +1,6 @@
-# Environment variables and secrets
+# Environment variables
 .env
-*.env
-secrets.toml
 .streamlit/secrets.toml
-
-# API Keys and credentials
-config.py
-credentials.json
-*.key
-*.pem
-
-# Database files
-*.db
-*.sqlite
-*.sqlite3
-chroma_db/
-neo4j_data/
 
 # Python
 __pycache__/
@@ -35,67 +20,19 @@ parts/
 sdist/
 var/
 wheels/
-pip-wheel-metadata/
-share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
 
-# Virtual environments
-venv/
-env/
-ENV/
-.venv/
-.env/
+# ChromaDB
+chroma_db/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
 # OS
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
-
-# Logs
-*.log
-logs/
-
-# Cache
-.cache/
-*.cache
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# pytest
-.pytest_cache/
-
-# Coverage reports
-htmlcov/
-.coverage
-.coverage.*
-coverage.xml
-
-# Streamlit
-.streamlit/
-
-# Temporary files
-*.tmp
-*.temp
-
-# Vector database
-chroma_db/
-vector_storage/
-
-# Knowledge graph exports
-*.cypher
-graph_exports/

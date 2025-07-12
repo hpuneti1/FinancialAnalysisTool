@@ -3,6 +3,7 @@ import yfinance as yf
 import json
 from openai import OpenAI
 
+#This classes extracts entities from the user query
 class EntityExtractor:
     def __init__(self, open_api_key: str):
         self.openai_client = OpenAI(api_key=open_api_key)
@@ -22,7 +23,6 @@ class EntityExtractor:
                 'Real Estate': ['AMT', 'PLD', 'CCI', 'EQIX', 'SPG', 'O', 'WELL', 'DLR', 'PSA', 'EQR']
             }
             
-        # Add stock group mappings
         self.stock_groups = {
             'FAANG': ['META', 'AAPL', 'AMZN', 'NFLX', 'GOOGL'],
             'Magnificent 7': ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META'],
@@ -33,6 +33,7 @@ class EntityExtractor:
             'EV': ['TSLA', 'RIVN', 'LCID', 'NIO', 'XPEV', 'LI', 'F', 'GM'],
             'Biotech': ['GILD', 'AMGN', 'BIIB', 'REGN', 'VRTX', 'ILMN', 'MRNA', 'BNTX']
             }
+    #Using GPT to handle the extraction of entities
     def extract_entities(self, text: str) -> dict:
         if text in self.extraction_cache:
             return self.extraction_cache[text]
@@ -55,7 +56,7 @@ class EntityExtractor:
             ],
             "tickers_mentioned": ["AAPL", "MSFT", "GOOGL"],
             "sector_queries": [
-                {"sector": "Technology", "query_type": "broad_sector", "confidence": 0.95}
+                {"sector": "Banking", "query_type": "broad_sector", "confidence": 0.95}
             ]
         }
 
@@ -63,15 +64,17 @@ class EntityExtractor:
         1. Only include companies/entities actually mentioned in the text
         2. For company names, provide the most likely ticker symbol
         3. Include confidence scores (0-1) based on how certain you are
-        4. Recognize common stock groups: FAANG, Magnificent 7, Big Tech, semiconductor stocks, bank stocks, etc.
-        5. Map sectors to: Technology, Healthcare, Financial, Energy, Consumer Discretionary, Consumer Staples, Industrials, Materials, Communication Services, Utilities, Real Estate
+        4. Recognize common stock groups: FAANG, Magnificent 7, Big Tech, semiconductor stocks, bank stocks, banking stocks, etc.
+        5. Map sectors to: Technology, Healthcare, Financial, Banking, Energy, Consumer Discretionary, Consumer Staples, Industrials, Materials, Communication Services, Utilities, Real Estate
         6. Handle variations: "Apple" = AAPL, "Microsoft Corp" = MSFT, "Alphabet" = GOOGL
         7. If text mentions stock groups, expand them to individual tickers
-        8. For broad sector queries like "technology sector trends" or "banking stocks", add to sector_queries
+        8. For broad sector queries like "technology sector trends", "banking stocks", "bank stocks", or "how are X stocks doing", add to sector_queries with high confidence
         9. Return empty arrays if no entities found
         10. Handle company names: "C3.ai" → company="C3.ai Inc", ticker="C3.AI"
         11. AI companies should be mapped to Technology sector
         12. Don't filter out valid ticker symbols and handle tickers with dots and numbers
+        13. IMPORTANT: For queries like "banking stocks", "bank stocks", "how are banking stocks doing", always add {"sector": "Banking", "query_type": "broad_sector", "confidence": 0.95} to sector_queries
+        14. IMPORTANT: "banking stocks" should map to Banking sector, not Financial sector
         """
         
         user_prompt = f"Extract the financial entities contained in this text: {text}"
@@ -100,17 +103,15 @@ class EntityExtractor:
             print(f"LLM entity extraction failed: {e}")
             return {}
         
-    
+    #Extracting tickers for ticker information
     def extract_tickers(self, text: str) -> list[str]:
             entities = self.extract_entities(text)
             all_tickers = []
             
-            # Get tickers from companies
             for company in entities.get('companies', []):
                 if company.get('confidence', 0) > 0.5:
                     all_tickers.append(company['ticker'])
                     
-            # Get tickers from stock groups
             for group in entities.get('stock_groups', []):
                 if group.get('confidence', 0) > 0.5:
                     all_tickers.extend(group['companies']) 
@@ -118,9 +119,8 @@ class EntityExtractor:
             all_tickers.extend(entities.get('tickers_mentioned', []))
             
             for sector_query in entities.get('sector_queries', []):
-                if sector_query.get('confidence', 0) > 0.6:
+                if sector_query.get('confidence', 0) > 0.5:
                     sector_name = sector_query['sector']
-                    # Map sector to representative tickers
                     sector_tickers = self.get_sector_tickers(sector_name)
                     all_tickers.extend(sector_tickers)
             
@@ -137,11 +137,12 @@ class EntityExtractor:
                 if self._is_valid_ticker_format(ticker):
                     validated_tickers.append(ticker) 
             return validated_tickers
-        
+
+    #Getting sector tickers    
     def get_sector_tickers(self, sector_name: str) -> list[str]:
-        """Get representative tickers for a sector"""
         if sector_name in self.sector_tickers:
             return self.sector_tickers[sector_name][:5]
+            
         sector_variations = {
             'tech': 'Technology',
             'technology': 'Technology',
@@ -158,11 +159,13 @@ class EntityExtractor:
         }
         
         normalized_sector = sector_variations.get(sector_name.lower(), sector_name)
+        
         if normalized_sector in self.sector_tickers:
             return self.sector_tickers[normalized_sector][:5]
         
         return []
 
+    #Extract sectors from entities
     def extract_sectors(self, text: str) -> list[str]:
         entities = self.extract_entities(text)
         sectors = []
@@ -174,10 +177,8 @@ class EntityExtractor:
     
     def get_extraction_details(self, text: str) -> dict:
         return self.extract_entities(text)
-    
+    #Create search terms that have relevance to a company to aid in search
     def generate_search_terms(self, company_name: str, ticker: str, sector: str = "") -> list[str]:
-        """Generate comprehensive search terms for better news retrieval"""
-        # Handle None values and ensure strings
         company_name = str(company_name) if company_name is not None else ""
         ticker = str(ticker) if ticker is not None else ""
         sector = str(sector) if sector is not None else ""
@@ -218,14 +219,12 @@ class EntityExtractor:
             
             search_terms = json.loads(content)
             if isinstance(search_terms, list):
-                # Filter out None values and empty strings
                 filtered_terms = [str(term).strip() for term in search_terms if term is not None and str(term).strip()]
                 return filtered_terms if filtered_terms else ([company_name, ticker] if company_name and ticker else ["stock news"])
             else:
                 return [company_name, ticker] if company_name and ticker else ["stock news"]
             
         except Exception as e:
-            # Fallback to basic search terms
             basic_terms = []
             if company_name:
                 basic_terms.extend([company_name, f"{company_name} earnings"])
@@ -239,11 +238,9 @@ class EntityExtractor:
         if not ticker or len(ticker) < 1 or len(ticker) > 8:  # Extended length for tickers like "C3.AI"
             return False
         
-        # Updated regex to handle tickers with dots and numbers like "C3.AI"
         if not re.match(r'^[A-Z0-9]{1,6}(\.[A-Z0-9]{1,4})?$', ticker):
             return False
         
-        # Known valid tickers that might look like abbreviations
         valid_tickers = {'AI', 'IT', 'ON', 'UP', 'TV', 'GM', 'GE', 'HP', 'AT', 'GO', 'C3.AI'}
         if ticker in valid_tickers:
             return True

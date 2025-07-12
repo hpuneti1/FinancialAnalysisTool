@@ -2,17 +2,15 @@ import streamlit as st
 import os
 from neo4j import GraphDatabase
 
-# Load environment variables from .env file if it exists
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
-
+#This class deals with the neo4j graph
 class FinancialKnowledgeGraph:
     def __init__(self):
         try:
-            # Get Neo4j connection details from environment variables or Streamlit secrets
             neo4j_uri = os.environ.get("NEO4J_URI", "neo4j://localhost:7687")
             neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
             neo4j_password = os.environ.get("NEO4J_PASSWORD", "admin123")
@@ -23,17 +21,16 @@ class FinancialKnowledgeGraph:
                     neo4j_user = st.secrets.get("NEO4J_USER", neo4j_user)
                     neo4j_password = st.secrets.get("NEO4J_PASSWORD", neo4j_password)
             except Exception:
-                pass  # Ignore secrets parsing errors
+                pass
             
             self.driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
-            # Test connection
             with self.driver.session() as session:
                 session.run("MATCH () RETURN count(*) as count")
             st.success("Connected to Neo4j")
         except Exception as e:
             st.warning(f"Neo4j not available: {e}")
             self.driver = None
-    
+    #Intialization of the graph
     def initialize_graph(self):
         if not self.driver:
             return
@@ -54,7 +51,7 @@ class FinancialKnowledgeGraph:
             st.success("Knowledge graph initialized")
         except Exception as e:
             st.error(f"Graph initialization error: {e}")
-    
+    #Add a company node to the graph
     def add_company(self, company_data: dict):
         if not company_data:
             return
@@ -78,7 +75,6 @@ class FinancialKnowledgeGraph:
                     return str(value)
             
             with self.driver.session() as session:
-                # Create company node
                 session.run("""
                     MERGE (c:Company {ticker: $ticker})
                     SET c.name = $name,
@@ -93,7 +89,6 @@ class FinancialKnowledgeGraph:
                     'marketCap': convert_value(company_data.get('marketCap', 0))
                 })
                 
-                # Create sector relationship
                 sector = company_data.get('sector', '')
                 if sector:
                     session.run("""
@@ -103,7 +98,6 @@ class FinancialKnowledgeGraph:
                         MERGE (c)-[:BELONGS_TO]->(s)
                     """, {'sector': str(sector), 'ticker': ticker})
                 
-                # Create stock data if available
                 if 'price' in company_data:
                     session.run("""
                         MERGE (sd:StockData {ticker: $ticker})
@@ -123,11 +117,11 @@ class FinancialKnowledgeGraph:
                         'volume': convert_value(company_data.get('volume', 0)),
                         'lastUpdated': str(company_data.get('lastUpdated', ''))
                     })
-            
                 
         except Exception as e:
             st.warning(f"Error adding company {company_data.get('ticker', 'Unknown')}: {e}")
     
+    #Add article node to the graph
     def add_news_article(self, article: dict, mentioned_tickers: list[str]):
         if not self.driver or not article:
             return
@@ -136,7 +130,6 @@ class FinancialKnowledgeGraph:
             article_id = f"article_{hash(article.get('title', ''))}"
             
             with self.driver.session() as session:
-                # Create news article
                 session.run("""
                     MERGE (a:NewsArticle {id: $id})
                     SET a.title = $title,
@@ -153,7 +146,6 @@ class FinancialKnowledgeGraph:
                     'url': article.get('url', '')
                 })
                 
-                # Create relationships to mentioned companies
                 for ticker in mentioned_tickers:
                     session.run("""
                         MATCH (a:NewsArticle {id: $article_id})
@@ -179,35 +171,29 @@ class FinancialKnowledgeGraph:
                 
                 record = result.single()
                 if record:
-                    return f"{record['company']} ({ticker}) operates in {record['sector']} sector, trading at ${record['price']} ({record['change']})"
+                    return f"{record['company']} ({ticker}) operates in {record['sector']} sector, trading at ${record['price']}"
                 return ""
         except:
             return ""
     
     def get_graph_stats(self) -> dict:
-        """Get knowledge graph statistics with detailed debugging"""
         if not self.driver:
             return {"companies": 0, "sectors": 0, "articles": 0, "status": "Neo4j not connected"}
         
         try:
             with self.driver.session() as session:
-                # Get total company count
                 companies_result = session.run("MATCH (c:Company) RETURN count(c) as count")
                 companies = companies_result.single()['count']
                 
-                # Get unique companies by ticker
                 unique_result = session.run("MATCH (c:Company) RETURN count(DISTINCT c.ticker) as count")
                 unique_companies = unique_result.single()['count']
                 
-                # Get companies with missing data
                 incomplete_result = session.run("MATCH (c:Company) WHERE c.name IS NULL OR c.name = '' RETURN count(c) as count")
                 incomplete_companies = incomplete_result.single()['count']
                 
-                # Get duplicate tickers
                 duplicates_result = session.run("MATCH (c:Company) WITH c.ticker as ticker, count(c) as cnt WHERE cnt > 1 RETURN count(ticker) as count")
                 duplicates = duplicates_result.single()['count']
                 
-                # Get sectors and articles
                 sectors_result = session.run("MATCH (s:Sector) RETURN count(s) as count")
                 sectors = sectors_result.single()['count']
                 
@@ -227,7 +213,6 @@ class FinancialKnowledgeGraph:
             return {"companies": 0, "sectors": 0, "articles": 0, "status": f"Error: {e}"}
     
     def cleanup_graph(self) -> dict:
-        """Clean up duplicate and incomplete entries in the knowledge graph"""
         if not self.driver:
             return {"removed": 0, "error": "Neo4j not connected"}
         
@@ -235,7 +220,6 @@ class FinancialKnowledgeGraph:
             removed_count = 0
             
             with self.driver.session() as session:
-                # Remove companies with missing/empty names
                 result = session.run("""
                     MATCH (c:Company) 
                     WHERE c.name IS NULL OR c.name = ''
@@ -245,7 +229,6 @@ class FinancialKnowledgeGraph:
                 incomplete_removed = result.single()['removed']
                 removed_count += incomplete_removed
                 
-                # Remove duplicate companies (keep the most recent one)
                 result = session.run("""
                     MATCH (c:Company)
                     WITH c.ticker as ticker, collect(c) as companies
@@ -257,7 +240,6 @@ class FinancialKnowledgeGraph:
                 duplicate_removed = result.single()['removed']
                 removed_count += duplicate_removed
                 
-                # Remove orphaned StockData nodes
                 result = session.run("""
                     MATCH (s:StockData)
                     WHERE NOT (s)<-[:HAS_PERFORMANCE]-()
@@ -279,7 +261,6 @@ class FinancialKnowledgeGraph:
             return {"removed": 0, "error": str(e)}
     
     def list_all_companies(self) -> list:
-        """List all companies in the knowledge graph"""
         if not self.driver:
             return []
         
