@@ -5,7 +5,6 @@ This guide covers various deployment options for the Financial Analysis Tool, fr
 ## 📋 Table of Contents
 - [Local Development](#local-development)
 - [Cloud Neo4j (Recommended)](#cloud-neo4j-recommended)
-- [Docker Deployment](#docker-deployment)
 - [Streamlit Cloud](#streamlit-cloud)
 - [AWS Deployment](#aws-deployment)
 - [Google Cloud Platform](#google-cloud-platform)
@@ -14,7 +13,7 @@ This guide covers various deployment options for the Financial Analysis Tool, fr
 
 ### Prerequisites
 - Python 3.8+
-- Neo4j Desktop or Docker
+- Neo4j Desktop or Neo4j Aura Cloud
 
 ### Setup
 1. Clone and install dependencies
@@ -50,94 +49,6 @@ This guide covers various deployment options for the Financial Analysis Tool, fr
    - ✅ Global accessibility
    - ✅ Free tier available
 
-## 🐳 Docker Deployment
-
-### Option 1: Docker Compose (Recommended)
-
-Create `docker-compose.yml`:
-
-```yaml
-version: '3.8'
-
-services:
-  app:
-    build: .
-    ports:
-      - "8501:8501"
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - NEWS_API_KEY=${NEWS_API_KEY}
-      - NEO4J_URI=neo4j://neo4j:7687
-      - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=admin123
-    depends_on:
-      - neo4j
-    volumes:
-      - ./chroma_db:/app/chroma_db
-
-  neo4j:
-    image: neo4j:5.0
-    ports:
-      - "7474:7474"
-      - "7687:7687"
-    environment:
-      - NEO4J_AUTH=neo4j/admin123
-      - NEO4J_PLUGINS=["graph-data-science"]
-    volumes:
-      - neo4j_data:/data
-
-volumes:
-  neo4j_data:
-```
-
-Create `Dockerfile`:
-
-```dockerfile
-FROM python:3.9-slim
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-
-COPY . .
-
-EXPOSE 8501
-
-CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0"]
-```
-
-### Deploy with Docker Compose
-
-```bash
-# Set environment variables
-export OPENAI_API_KEY=your_key
-export NEWS_API_KEY=your_key
-
-# Deploy
-docker-compose up -d
-```
-
-### Option 2: Individual Containers
-
-```bash
-# Run Neo4j
-docker run -d \
-  --name neo4j \
-  -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/admin123 \
-  neo4j:5.0
-
-# Run Application
-docker run -d \
-  --name financial-analyzer \
-  -p 8501:8501 \
-  -e OPENAI_API_KEY=your_key \
-  -e NEWS_API_KEY=your_key \
-  -e NEO4J_URI=neo4j://neo4j:7687 \
-  --link neo4j:neo4j \
-  your-dockerhub-username/financial-analyzer
-```
 
 ## 🌐 Streamlit Cloud
 
@@ -175,7 +86,7 @@ docker run -d \
 
 ### Option 1: AWS ECS with Fargate
 
-1. **Push Docker image to ECR**
+1. **Deploy Python application to EC2**
 2. **Create ECS cluster**
 3. **Deploy task with environment variables**
 4. **Use Application Load Balancer**
@@ -183,8 +94,8 @@ docker run -d \
 ### Option 2: AWS EC2
 
 1. **Launch EC2 instance**
-2. **Install Docker and Docker Compose**
-3. **Deploy using docker-compose**
+2. **Install Python and dependencies**
+3. **Deploy using systemd or PM2**
 4. **Configure security groups**
 
 ### Managed Database Options
@@ -198,9 +109,8 @@ docker run -d \
 ### Option 1: Google Cloud Run
 
 ```bash
-# Build and deploy
-gcloud builds submit --tag gcr.io/PROJECT_ID/financial-analyzer
-gcloud run deploy --image gcr.io/PROJECT_ID/financial-analyzer --platform managed
+# Deploy Python application to Cloud Run
+gcloud run deploy financial-analyzer --source . --platform managed
 ```
 
 ### Option 2: Google Kubernetes Engine (GKE)

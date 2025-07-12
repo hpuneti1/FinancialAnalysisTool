@@ -256,6 +256,8 @@ class GraphRAGSystem:
             - Use bullet points with simple dashes (-)
             - Keep formatting minimal and readable
             - Do not use markdown formatting like **bold** or *italics*
+            - Do not add extra spaces between letters or words
+            - Write prices and percentages as continuous text: "$503.32 with an increase of 0.37%"
             
             {"SECTOR ANALYSIS MODE: You are analyzing a broad sector or group of stocks. Provide sector-wide trends, compare performance across companies, and give sector outlook." if is_sector_analysis else "COMPANY ANALYSIS MODE: Focus on specific companies mentioned in the query."}
             

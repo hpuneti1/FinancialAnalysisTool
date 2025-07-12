@@ -1,6 +1,6 @@
 import streamlit as st
 import os
-from py2neo import Graph, Node, Relationship
+from neo4j import GraphDatabase
 
 # Load environment variables from .env file if it exists
 try:
@@ -25,15 +25,17 @@ class FinancialKnowledgeGraph:
             except Exception:
                 pass  # Ignore secrets parsing errors
             
-            self.graph = Graph(neo4j_uri, auth=(neo4j_user, neo4j_password))
-            self.graph.run("MATCH () RETURN count(*) as count")
+            self.driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+            # Test connection
+            with self.driver.session() as session:
+                session.run("MATCH () RETURN count(*) as count")
             st.success("Connected to Neo4j")
         except Exception as e:
             st.warning(f"Neo4j not available: {e}")
-            self.graph = None
+            self.driver = None
     
     def initialize_graph(self):
-        if not self.graph:
+        if not self.driver:
             return
         
         try:
@@ -42,11 +44,12 @@ class FinancialKnowledgeGraph:
                 "CREATE CONSTRAINT sector_name IF NOT EXISTS FOR (s:Sector) REQUIRE s.name IS UNIQUE"
             ]
             
-            for constraint in constraints:
-                try:
-                    self.graph.run(constraint)
-                except:
-                    pass
+            with self.driver.session() as session:
+                for constraint in constraints:
+                    try:
+                        session.run(constraint)
+                    except:
+                        pass
             
             st.success("Knowledge graph initialized")
         except Exception as e:
@@ -56,9 +59,10 @@ class FinancialKnowledgeGraph:
         if not company_data:
             return
             
-        if not self.graph:
+        if not self.driver:
             st.warning(f"❌ Neo4j not connected - cannot add {company_data.get('ticker', 'Unknown')} to knowledge graph")
             return
+        
         
         try:
             ticker = company_data['ticker']
@@ -73,120 +77,150 @@ class FinancialKnowledgeGraph:
                 else:
                     return str(value)
             
-            company_node = Node("Company",
-                               ticker=ticker,
-                               name=str(company_data.get('companyName', '')),
-                               sector=str(company_data.get('sector', '')),
-                               industry=str(company_data.get('industry', '')),
-                               marketCap=convert_value(company_data.get('marketCap', 0)))
-            
-            self.graph.merge(company_node, "Company", "ticker")
-            
-            sector = company_data.get('sector', '')
-            if sector:
-                sector_node = Node("Sector", name=str(sector))
-                self.graph.merge(sector_node, "Sector", "name")
+            with self.driver.session() as session:
+                # Create company node
+                session.run("""
+                    MERGE (c:Company {ticker: $ticker})
+                    SET c.name = $name,
+                        c.sector = $sector,
+                        c.industry = $industry,
+                        c.marketCap = $marketCap
+                """, {
+                    'ticker': ticker,
+                    'name': str(company_data.get('companyName', '')),
+                    'sector': str(company_data.get('sector', '')),
+                    'industry': str(company_data.get('industry', '')),
+                    'marketCap': convert_value(company_data.get('marketCap', 0))
+                })
                 
-                relationship = Relationship(company_node, "BELONGS_TO", sector_node)
-                self.graph.merge(relationship)
-            
-            if 'price' in company_data:
-                performance_node = Node("StockData",
-                                       ticker=ticker,
-                                       price=convert_value(company_data.get('price', 0)),
-                                       change=convert_value(company_data.get('change', 0)),
-                                       changePercent=str(company_data.get('changePercent', '0%')),
-                                       volume=convert_value(company_data.get('volume', 0)),
-                                       lastUpdated=str(company_data.get('lastUpdated', '')))
+                # Create sector relationship
+                sector = company_data.get('sector', '')
+                if sector:
+                    session.run("""
+                        MERGE (s:Sector {name: $sector})
+                        WITH s
+                        MATCH (c:Company {ticker: $ticker})
+                        MERGE (c)-[:BELONGS_TO]->(s)
+                    """, {'sector': str(sector), 'ticker': ticker})
                 
-                self.graph.merge(performance_node, "StockData", "ticker")
-                
-                perf_relationship = Relationship(company_node, "HAS_PERFORMANCE", performance_node)
-                self.graph.merge(perf_relationship)
+                # Create stock data if available
+                if 'price' in company_data:
+                    session.run("""
+                        MERGE (sd:StockData {ticker: $ticker})
+                        SET sd.price = $price,
+                            sd.change = $change,
+                            sd.changePercent = $changePercent,
+                            sd.volume = $volume,
+                            sd.lastUpdated = $lastUpdated
+                        WITH sd
+                        MATCH (c:Company {ticker: $ticker})
+                        MERGE (c)-[:HAS_PERFORMANCE]->(sd)
+                    """, {
+                        'ticker': ticker,
+                        'price': convert_value(company_data.get('price', 0)),
+                        'change': convert_value(company_data.get('change', 0)),
+                        'changePercent': str(company_data.get('changePercent', '0%')),
+                        'volume': convert_value(company_data.get('volume', 0)),
+                        'lastUpdated': str(company_data.get('lastUpdated', ''))
+                    })
             
                 
         except Exception as e:
             st.warning(f"Error adding company {company_data.get('ticker', 'Unknown')}: {e}")
     
     def add_news_article(self, article: dict, mentioned_tickers: list[str]):
-        if not self.graph or not article:
+        if not self.driver or not article:
             return
         
         try:
             article_id = f"article_{hash(article.get('title', ''))}"
-            article_node = Node("NewsArticle",
-                               id=article_id,
-                               title=article.get('title', ''),
-                               content=article.get('content', '')[:500],
-                               source=article.get('source', ''),
-                               publishedAt=article.get('publishedAt', ''),
-                               url=article.get('url', ''))
             
-            self.graph.merge(article_node, "NewsArticle", "id")
-            
-            for ticker in mentioned_tickers:
-                company_match = self.graph.nodes.match("Company", ticker=ticker).first()
-                if company_match:
-                    mention_relationship = Relationship(article_node, "MENTIONS", company_match)
-                    self.graph.merge(mention_relationship)
+            with self.driver.session() as session:
+                # Create news article
+                session.run("""
+                    MERGE (a:NewsArticle {id: $id})
+                    SET a.title = $title,
+                        a.content = $content,
+                        a.source = $source,
+                        a.publishedAt = $publishedAt,
+                        a.url = $url
+                """, {
+                    'id': article_id,
+                    'title': article.get('title', ''),
+                    'content': article.get('content', '')[:500],
+                    'source': article.get('source', ''),
+                    'publishedAt': article.get('publishedAt', ''),
+                    'url': article.get('url', '')
+                })
+                
+                # Create relationships to mentioned companies
+                for ticker in mentioned_tickers:
+                    session.run("""
+                        MATCH (a:NewsArticle {id: $article_id})
+                        MATCH (c:Company {ticker: $ticker})
+                        MERGE (a)-[:MENTIONS]->(c)
+                    """, {'article_id': article_id, 'ticker': ticker})
                     
         except Exception as e:
             st.warning(f"Error adding news article: {e}")
     
     def query_company_context(self, ticker: str) -> str:
-        if not self.graph:
+        if not self.driver:
             return ""
         
         try:
-            query = f"""
-            MATCH (c:Company {{ticker: '{ticker}'}})
-            OPTIONAL MATCH (c)-[:BELONGS_TO]->(s:Sector)
-            OPTIONAL MATCH (c)-[:HAS_PERFORMANCE]->(p:StockData)
-            RETURN c.name as company, s.name as sector, p.price as price, p.changePercent as change
-            """
-            
-            result = self.graph.run(query).data()
-            if result:
-                info = result[0]
-                return f"{info['company']} ({ticker}) operates in {info['sector']} sector, trading at ${info['price']} ({info['change']})"
-            return ""
+            with self.driver.session() as session:
+                result = session.run("""
+                    MATCH (c:Company {ticker: $ticker})
+                    OPTIONAL MATCH (c)-[:BELONGS_TO]->(s:Sector)
+                    OPTIONAL MATCH (c)-[:HAS_PERFORMANCE]->(p:StockData)
+                    RETURN c.name as company, s.name as sector, p.price as price, p.changePercent as change
+                """, {'ticker': ticker})
+                
+                record = result.single()
+                if record:
+                    return f"{record['company']} ({ticker}) operates in {record['sector']} sector, trading at ${record['price']} ({record['change']})"
+                return ""
         except:
             return ""
     
     def get_graph_stats(self) -> dict:
         """Get knowledge graph statistics with detailed debugging"""
-        if not self.graph:
+        if not self.driver:
             return {"companies": 0, "sectors": 0, "articles": 0, "status": "Neo4j not connected"}
         
         try:
-            # Get total company count
-            companies = self.graph.run("MATCH (c:Company) RETURN count(c) as count").data()
-            
-            # Get unique companies by ticker
-            unique_companies = self.graph.run(
-                "MATCH (c:Company) RETURN count(DISTINCT c.ticker) as count"
-            ).data()
-            
-            # Get companies with missing data
-            incomplete_companies = self.graph.run(
-                "MATCH (c:Company) WHERE c.name IS NULL OR c.name = '' RETURN count(c) as count"
-            ).data()
-            
-            # Get duplicate tickers
-            duplicates = self.graph.run(
-                "MATCH (c:Company) WITH c.ticker as ticker, count(c) as cnt WHERE cnt > 1 RETURN count(ticker) as count"
-            ).data()
-            
-            sectors = self.graph.run("MATCH (s:Sector) RETURN count(s) as count").data()
-            articles = self.graph.run("MATCH (a:NewsArticle) RETURN count(a) as count").data()
+            with self.driver.session() as session:
+                # Get total company count
+                companies_result = session.run("MATCH (c:Company) RETURN count(c) as count")
+                companies = companies_result.single()['count']
+                
+                # Get unique companies by ticker
+                unique_result = session.run("MATCH (c:Company) RETURN count(DISTINCT c.ticker) as count")
+                unique_companies = unique_result.single()['count']
+                
+                # Get companies with missing data
+                incomplete_result = session.run("MATCH (c:Company) WHERE c.name IS NULL OR c.name = '' RETURN count(c) as count")
+                incomplete_companies = incomplete_result.single()['count']
+                
+                # Get duplicate tickers
+                duplicates_result = session.run("MATCH (c:Company) WITH c.ticker as ticker, count(c) as cnt WHERE cnt > 1 RETURN count(ticker) as count")
+                duplicates = duplicates_result.single()['count']
+                
+                # Get sectors and articles
+                sectors_result = session.run("MATCH (s:Sector) RETURN count(s) as count")
+                sectors = sectors_result.single()['count']
+                
+                articles_result = session.run("MATCH (a:NewsArticle) RETURN count(a) as count")
+                articles = articles_result.single()['count']
             
             return {
-                "companies": companies[0]['count'] if companies else 0,
-                "unique_companies": unique_companies[0]['count'] if unique_companies else 0,
-                "incomplete_companies": incomplete_companies[0]['count'] if incomplete_companies else 0,
-                "duplicate_tickers": duplicates[0]['count'] if duplicates else 0,
-                "sectors": sectors[0]['count'] if sectors else 0,
-                "articles": articles[0]['count'] if articles else 0,
+                "companies": companies,
+                "unique_companies": unique_companies,
+                "incomplete_companies": incomplete_companies,
+                "duplicate_tickers": duplicates,
+                "sectors": sectors,
+                "articles": articles,
                 "status": "Connected"
             }
         except Exception as e:
@@ -194,43 +228,44 @@ class FinancialKnowledgeGraph:
     
     def cleanup_graph(self) -> dict:
         """Clean up duplicate and incomplete entries in the knowledge graph"""
-        if not self.graph:
+        if not self.driver:
             return {"removed": 0, "error": "Neo4j not connected"}
         
         try:
             removed_count = 0
             
-            # Remove companies with missing/empty names
-            result = self.graph.run("""
-                MATCH (c:Company) 
-                WHERE c.name IS NULL OR c.name = ''
-                DETACH DELETE c
-                RETURN count(c) as removed
-            """)
-            incomplete_removed = result.data()[0]['removed'] if result.data() else 0
-            removed_count += incomplete_removed
-            
-            # Remove duplicate companies (keep the most recent one)
-            result = self.graph.run("""
-                MATCH (c:Company)
-                WITH c.ticker as ticker, collect(c) as companies
-                WHERE size(companies) > 1
-                UNWIND companies[1..] as duplicateCompany
-                DETACH DELETE duplicateCompany
-                RETURN count(duplicateCompany) as removed
-            """)
-            duplicate_removed = result.data()[0]['removed'] if result.data() else 0
-            removed_count += duplicate_removed
-            
-            # Remove orphaned StockData nodes
-            result = self.graph.run("""
-                MATCH (s:StockData)
-                WHERE NOT (s)<-[:HAS_PERFORMANCE]-()
-                DELETE s
-                RETURN count(s) as removed
-            """)
-            orphan_removed = result.data()[0]['removed'] if result.data() else 0
-            removed_count += orphan_removed
+            with self.driver.session() as session:
+                # Remove companies with missing/empty names
+                result = session.run("""
+                    MATCH (c:Company) 
+                    WHERE c.name IS NULL OR c.name = ''
+                    DETACH DELETE c
+                    RETURN count(c) as removed
+                """)
+                incomplete_removed = result.single()['removed']
+                removed_count += incomplete_removed
+                
+                # Remove duplicate companies (keep the most recent one)
+                result = session.run("""
+                    MATCH (c:Company)
+                    WITH c.ticker as ticker, collect(c) as companies
+                    WHERE size(companies) > 1
+                    UNWIND companies[1..] as duplicateCompany
+                    DETACH DELETE duplicateCompany
+                    RETURN count(duplicateCompany) as removed
+                """)
+                duplicate_removed = result.single()['removed']
+                removed_count += duplicate_removed
+                
+                # Remove orphaned StockData nodes
+                result = session.run("""
+                    MATCH (s:StockData)
+                    WHERE NOT (s)<-[:HAS_PERFORMANCE]-()
+                    DELETE s
+                    RETURN count(s) as removed
+                """)
+                orphan_removed = result.single()['removed']
+                removed_count += orphan_removed
             
             return {
                 "removed": removed_count,
@@ -245,26 +280,27 @@ class FinancialKnowledgeGraph:
     
     def list_all_companies(self) -> list:
         """List all companies in the knowledge graph"""
-        if not self.graph:
+        if not self.driver:
             return []
         
         try:
-            result = self.graph.run("""
-                MATCH (c:Company)
-                OPTIONAL MATCH (c)-[:BELONGS_TO]->(s:Sector)
-                RETURN c.ticker as ticker, c.name as name, s.name as sector
-                ORDER BY c.ticker
-            """)
-            
-            companies = []
-            for record in result.data():
-                companies.append({
-                    'ticker': record['ticker'],
-                    'name': record['name'] or 'N/A',
-                    'sector': record['sector'] or 'N/A'
-                })
-            
-            return companies
-            
+            with self.driver.session() as session:
+                result = session.run("""
+                    MATCH (c:Company)
+                    OPTIONAL MATCH (c)-[:BELONGS_TO]->(s:Sector)
+                    RETURN c.ticker as ticker, c.name as name, s.name as sector
+                    ORDER BY c.ticker
+                """)
+                
+                companies = []
+                for record in result:
+                    companies.append({
+                        'ticker': record['ticker'],
+                        'name': record['name'] or 'N/A',
+                        'sector': record['sector'] or 'N/A'
+                    })
+                
+                return companies
+                
         except Exception as e:
             return []

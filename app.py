@@ -12,7 +12,6 @@ except ImportError:
 def main():
     st.set_page_config(
         page_title="Financial Graph RAG Analyzer",
-        page_icon="📈",
         layout="wide"
     )
     
@@ -31,7 +30,7 @@ def main():
                 st.session_state.user_query = example
 
     st.title("Financial Analyzer")
-    st.markdown("###Financial analysis using Knowledge Graphs and Retrieval Augmented Generation")
+    st.markdown("Financial analysis using Knowledge Graphs and Retrieval Augmented Generation")
     
     # Get OpenAI API key from environment variables, Streamlit secrets, or fallback to hardcoded
     openai_key = None
@@ -45,13 +44,30 @@ def main():
             pass  # Ignore secrets parsing errors
         
         if not openai_key:
-            # Fallback to hardcoded key (your original key)
-            openai_key = "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"
+            # No API key found in environment or secrets
+            openai_key = None
     
+    # API Key Input Section
     if not openai_key or openai_key.startswith("sk-your") or openai_key.startswith("your-"):
-        st.error("❌ Please set your OpenAI API key in environment variables or Streamlit secrets!")
-        st.info("💡 Set OPENAI_API_KEY environment variable or add it to .streamlit/secrets.toml")
-        st.stop()
+        st.warning("🔑 OpenAI API Key Required")
+        st.info("💡 You can set OPENAI_API_KEY as an environment variable or enter it below:")
+        
+        user_api_key = st.text_input(
+            "Enter your OpenAI API Key:",
+            type="password",
+            placeholder="sk-...",
+            help="Your API key will not be stored and is only used for this session"
+        )
+        
+        if user_api_key:
+            if user_api_key.startswith("sk-"):
+                openai_key = user_api_key
+                st.success("✅ API Key accepted!")
+            else:
+                st.error("❌ Please enter a valid OpenAI API key (starts with 'sk-')")
+                st.stop()
+        else:
+            st.stop()
     
     if 'rag_system' not in st.session_state:
         with st.spinner("Initializing Graph RAG System..."):
@@ -72,14 +88,21 @@ def main():
             result = st.session_state.rag_system.process_user_query(user_query)
             
             st.header("Analysis")
-            st.write(result['response'])
+            # Clean the response to fix formatting issues
+            clean_response = result['response'].replace('\n', '\n\n')
+            st.markdown(clean_response, unsafe_allow_html=False)
             
             tab1, tab2 = st.tabs(["Stock Data", "News Articles"])
             
             with tab1:
                 st.subheader("Stock Data")
-                if result['stock_data']:
-                    for ticker, data in result['stock_data'].items():
+                # Only show stock data for companies mentioned in the query
+                mentioned_tickers = result.get('mentioned_tickers', [])
+                relevant_stock_data = {ticker: data for ticker, data in result['stock_data'].items() 
+                                     if ticker in mentioned_tickers}
+                
+                if relevant_stock_data:
+                    for ticker, data in relevant_stock_data.items():
                         with st.container():
                             st.metric(
                                 label=f"{data['companyName']} ({ticker})",
