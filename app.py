@@ -83,8 +83,9 @@ def main():
             with tab1:
                 st.subheader("Stock Data")
                 mentioned_tickers = result.get('mentioned_tickers', [])
+                original_tickers = result.get('original_tickers', mentioned_tickers)
                 relevant_stock_data = {ticker: data for ticker, data in result['stock_data'].items() 
-                                     if ticker in mentioned_tickers}
+                                     if ticker in original_tickers}
                 
                 if relevant_stock_data:
                     for ticker, data in relevant_stock_data.items():

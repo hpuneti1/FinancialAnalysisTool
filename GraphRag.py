@@ -232,6 +232,7 @@ class GraphRAGSystem:
         return {
             'response': response,
             'mentioned_tickers': all_tickers,
+            'original_tickers': mentioned_tickers,
             'mentioned_sectors': mentioned_sectors,
             'stock_data': stock_data,
             'relevant_articles': relevant_articles,

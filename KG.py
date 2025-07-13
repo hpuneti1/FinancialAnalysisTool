@@ -11,9 +11,9 @@ except ImportError:
 class FinancialKnowledgeGraph:
     def __init__(self):
         try:
-            neo4j_uri = os.environ.get("NEO4J_URI", "neo4j://localhost:7687")
+            neo4j_uri = os.environ.get("NEO4J_URI")
             neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
-            neo4j_password = os.environ.get("NEO4J_PASSWORD", "admin123")
+            neo4j_password = os.environ.get("NEO4J_PASSWORD")
             
             try:
                 if hasattr(st, 'secrets'):
@@ -23,10 +23,14 @@ class FinancialKnowledgeGraph:
             except Exception:
                 pass
             
-            self.driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
-            with self.driver.session() as session:
-                session.run("MATCH () RETURN count(*) as count")
-            st.success("Connected to Neo4j")
+            if neo4j_uri and neo4j_password:
+                self.driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+                with self.driver.session() as session:
+                    session.run("MATCH () RETURN count(*) as count")
+                st.success("Connected to Neo4j")
+            else:
+                st.info("Neo4j credentials not configured - using simplified mode")
+                self.driver = None
         except Exception as e:
             st.warning(f"Neo4j not available: {e}")
             self.driver = None
