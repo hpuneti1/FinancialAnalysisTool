@@ -23,14 +23,14 @@ class FinancialKnowledgeGraph:
             except Exception:
                 pass
             
-            if neo4j_uri and neo4j_password:
-                self.driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
-                with self.driver.session() as session:
-                    session.run("MATCH () RETURN count(*) as count")
-                st.success("Connected to Neo4j")
-            else:
-                st.info("Neo4j credentials not configured - using simplified mode")
-                self.driver = None
+            if not neo4j_uri or not neo4j_password:
+                st.error("Neo4j credentials not configured. Please set NEO4J_URI and NEO4J_PASSWORD in secrets.")
+                raise ValueError("Neo4j credentials missing")
+                
+            self.driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+            with self.driver.session() as session:
+                session.run("MATCH () RETURN count(*) as count")
+            st.success("Connected to Neo4j")
         except Exception as e:
             st.warning(f"Neo4j not available: {e}")
             self.driver = None
